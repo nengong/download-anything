@@ -19,11 +19,14 @@ class TargetAsset:
     downloaded_bytes: int = 0
     verified: bool = False
 
+AssetFile = TargetAsset
+
 @dataclass
 class AssetPackage:
     """Represents a complete structured asset package extracted from a source."""
     title: str
     platform: str
+    original_url: Optional[str] = None
     assets: List[TargetAsset] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     raw_markdown: Optional[str] = None
