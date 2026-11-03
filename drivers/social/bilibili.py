@@ -87,20 +87,37 @@ class BilibiliDriver(BaseDriver):
         }
 
         # 3. Fetch Play Stream URL
-        play_api = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=64&type=&otype=json"
-        try:
-            play_resp = session.get(play_api, timeout=12)
-            play_data = play_resp.json()
-        except Exception as e:
-            raise ExtractionError(f"Failed to query Bilibili playurl API: {e}")
-
+        audio_only = kwargs.get("audio_only", False)
         stream_url = None
         filesize = None
-        if play_data.get("code") == 0:
-            durl_list = play_data.get("data", {}).get("durl", [])
-            if durl_list:
-                stream_url = durl_list[0].get("url")
-                filesize = durl_list[0].get("size")
+        target_ext = "mp4"
+
+        if audio_only:
+            dash_api = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=16"
+            try:
+                dash_resp = session.get(dash_api, timeout=12)
+                dash_data = dash_resp.json()
+                if dash_data.get("code") == 0:
+                    audios = dash_data.get("data", {}).get("dash", {}).get("audio", [])
+                    if audios:
+                        stream_url = audios[0].get("baseUrl") or audios[0].get("base_url")
+                        target_ext = "m4a"
+            except Exception:
+                pass
+
+        if not stream_url:
+            play_api = f"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=64&type=&otype=json"
+            try:
+                play_resp = session.get(play_api, timeout=12)
+                play_data = play_resp.json()
+            except Exception as e:
+                raise ExtractionError(f"Failed to query Bilibili playurl API: {e}")
+
+            if play_data.get("code") == 0:
+                durl_list = play_data.get("data", {}).get("durl", [])
+                if durl_list:
+                    stream_url = durl_list[0].get("url")
+                    filesize = durl_list[0].get("size")
 
         if not stream_url:
             raise ExtractionError(f"Could not retrieve direct playback stream for {bvid}")
@@ -108,7 +125,7 @@ class BilibiliDriver(BaseDriver):
         assets: List[TargetAsset] = [
             TargetAsset(
                 url=stream_url,
-                filename="content.mp4",
+                filename=f"content.{target_ext}",
                 file_type="primary",
                 expected_size=filesize,
                 headers={"User-Agent": self.DEFAULT_HEADERS["User-Agent"], "Referer": f"https://www.bilibili.com/video/{bvid}"}

@@ -51,15 +51,30 @@ class YouTubeDriver(BaseDriver):
         thumbnail_url = info.get("thumbnail")
         duration = info.get("duration")
 
-        # Select best progressive MP4 stream under 500MB
+        # Select stream
         formats = info.get("formats", [])
         chosen_format = None
+        audio_only = kwargs.get("audio_only", False)
+
+        if audio_only:
+            audio_formats = [
+                f for f in formats
+                if f.get("acodec") != "none" and (f.get("vcodec") == "none" or not f.get("vcodec"))
+            ]
+            if audio_formats:
+                audio_formats.sort(key=lambda x: (x.get("abr") or 0, x.get("tbr") or 0), reverse=True)
+                for f in audio_formats:
+                    size = f.get("filesize") or f.get("filesize_approx") or 0
+                    if size <= 500 * 1024 * 1024 and f.get("url"):
+                        chosen_format = f
+                        break
 
         # 1. Prefer formats that have both audio and video (progressive MP4)
-        progressive_mp4s = [
-            f for f in formats 
-            if f.get("vcodec") != "none" and f.get("acodec") != "none" and f.get("ext") == "mp4"
-        ]
+        if not chosen_format:
+            progressive_mp4s = [
+                f for f in formats 
+                if f.get("vcodec") != "none" and f.get("acodec") != "none" and f.get("ext") == "mp4"
+            ]
         if progressive_mp4s:
             # Sort by height / bitrate descending
             progressive_mp4s.sort(key=lambda x: (x.get("height") or 0, x.get("tbr") or 0), reverse=True)

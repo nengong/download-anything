@@ -1,13 +1,17 @@
 """
 Download Anything (DA) - Unified CLI & Agent Skill Entry Point
+Supports single & batch downloads, audio extraction, password-protected archive unzipping,
+and dual-mode presentation (Rich human cards & standard Agent JSON).
 """
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any, Tuple
 
 import click
 from rich.console import Console
@@ -20,6 +24,7 @@ from core.fetcher import Fetcher, FetcherOptions
 from core.router import Router
 from core.sidecar import SidecarWriter
 from core.verifier import Verifier
+from core.unpacker import Unpacker
 from core.path_resolver import resolve_output_directory, sanitize_filename, get_system_downloads_dir
 from drivers import get_default_drivers
 from drivers.base import AssetPackage, TargetAsset
@@ -27,80 +32,53 @@ from drivers.base import AssetPackage, TargetAsset
 console = Console()
 err_console = Console(stderr=True)
 
-def sanitize_folder_name(name: str) -> str:
-    """Sanitize string for local directory creation."""
-    s = re.sub(r'[\\/*?:"<>|\n\r\t]', "_", name).strip()
-    return s[:64] if len(s) > 64 else s
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".avi", ".flv", ".mov", ".ts", ".m4v"}
 
-@click.command()
-@click.argument("target", required=False)
-@click.argument("subtarget", required=False)
-@click.option("-o", "--output-dir", help="Output directory path (default: ~/Downloads/DA/<folder>)")
-@click.option("-p", "--password", help="Explicit password/passcode if not embedded in input")
-@click.option("--max-mb", default=500, type=int, help="Maximum allowed file size in MB (default: 500)")
-@click.option("--check", is_flag=True, help="Dry run: inspect and extract metadata without downloading")
-@click.option("--no-sidecar", is_flag=True, help="Disable generating sidecar metadata (.info.json and .md)")
-@click.option("--json", "agent_mode", is_flag=True, help="Agent mode: output JSON result to stdout")
-@click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logs")
-def main(
-    target: Optional[str],
-    subtarget: Optional[str],
-    output_dir: Optional[str],
-    password: Optional[str],
-    max_mb: int,
-    check: bool,
-    no_sidecar: bool,
-    agent_mode: bool,
-    verbose: bool
-):
-    """
-    Download Anything (DA) - High-density micro-asset extraction & offline archiving hub.
-    Input can be a URL, mobile share text, or book MD5.
-    """
-    if target in ("login", "auth"):
-        platform_name = (subtarget or "quark").lower()
-        _handle_login(platform_name)
-        sys.exit(0)
+def _extract_audio_from_video(video_path: Path) -> Optional[Path]:
+    """Extract audio track from video file using ffmpeg."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
 
-    if target in ("doctor", "check-env", "diagnose"):
-        _handle_doctor(subtarget, agent_mode)
-        sys.exit(0)
-
-    if not target:
-        # Check system clipboard on macOS if available and in interactive human mode
-        if sys.platform == "darwin" and not agent_mode:
-            try:
-                import subprocess
-                clip = subprocess.check_output(["pbpaste"], text=True, timeout=1).strip()
-                if clip and ("http://" in clip or "https://" in clip or re.search(r"\b[0-9a-fA-F]{32}\b", clip) or re.search(r"\b[0-9]{4}\.[0-9]{4,5}\b", clip)):
-                    console.print(f"[dim cyan]📋 Detected input from clipboard:[/dim cyan] [dim]{clip[:80]}...[/dim]")
-                    target = clip
-            except Exception:
-                pass
-
-    if not target:
-        if agent_mode:
-            print(json.dumps({"status": "error", "message": "No target URL or text provided"}, ensure_ascii=False))
-            sys.exit(1)
-        console.print("[bold red]Error:[/bold red] Please provide a target URL or share text.")
-        console.print("Usage: [bold green]da \"<URL or share text>\"[/bold green]")
-        sys.exit(1)
-
-    # Output banner for Human mode
-    if not agent_mode and not check:
-        console.print(Panel.fit(
-            "[bold cyan]Download Anything[/bold cyan] [dim](DA v0.1.0)[/dim]\n"
-            "[dim]Universal Micro-Asset Extraction Hub[/dim]",
-            border_style="cyan"
-        ))
-
-    # 1. Setup Router and Dispatcher
-    router = Router(get_default_drivers())
+    # 1. Try lossless copy to .m4a
+    audio_path = video_path.with_suffix(".m4a")
+    cmd = [ffmpeg, "-y", "-i", str(video_path), "-vn", "-c:a", "copy", str(audio_path)]
     try:
-        driver, clean_input = router.route(target, explicit_password=password)
-    except DAError as e:
-        _handle_error(e, agent_mode)
-        sys.exit(1)
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        if res.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 1024:
+            video_path.unlink(missing_ok=True)
+            return audio_path
+    except Exception:
+        pass
+
+    # 2. Fallback to high-quality MP3 re-encoding
+    audio_path = video_path.with_suffix(".mp3")
+    cmd = [ffmpeg, "-y", "-i", str(video_path), "-vn", "-b:a", "192k", str(audio_path)]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+        if res.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 1024:
+            video_path.unlink(missing_ok=True)
+            return audio_path
+    except Exception:
+        pass
+
+    return None
+
+def process_download(
+    target_text: str,
+    output_dir: Optional[str] = None,
+    password: Optional[str] = None,
+    max_mb: int = 500,
+    check: bool = False,
+    no_sidecar: bool = False,
+    agent_mode: bool = False,
+    verbose: bool = False,
+    audio_only: bool = False,
+    auto_unzip: bool = True
+) -> Dict[str, Any]:
+    """Core download pipeline for a single target."""
+    router = Router(get_default_drivers())
+    driver, clean_input = router.route(target_text, explicit_password=password)
 
     if not agent_mode and verbose:
         console.print(f"[dim][*] Detected Driver: [bold]{driver.name}[/bold] ({driver.category})[/dim]")
@@ -108,75 +86,47 @@ def main(
         if clean_input.password:
             console.print(f"[dim][*] Passcode: {clean_input.password}[/dim]")
 
-    # 2. Extract Assets & Metadata
-    if not agent_mode:
-        with console.status("[bold blue]Resolving direct asset links and metadata...[/bold blue]"):
-            try:
-                package = driver.extract(clean_input.url, password=clean_input.password)
-            except Exception as e:
-                _handle_error(e, agent_mode)
-                sys.exit(1)
-    else:
-        try:
-            package = driver.extract(clean_input.url, password=clean_input.password)
-        except Exception as e:
-            _handle_error(e, agent_mode)
-            sys.exit(1)
-
+    # Extract assets with optional audio_only hint
+    package = driver.extract(clean_input.url, password=clean_input.password, audio_only=audio_only)
     primary_asset = package.primary_asset
     if not primary_asset:
-        err = DAError("Driver extracted 0 assets from target.")
-        _handle_error(err, agent_mode)
-        sys.exit(1)
+        raise DAError("Driver extracted 0 assets from target.")
 
-    # 3. Dry-run Check Mode
+    # Dry-run inspection
     if check:
-        if agent_mode:
-            print(json.dumps({
-                "status": "dry_run",
-                "platform": package.platform,
-                "title": package.title,
-                "primary_asset": {
-                    "filename": primary_asset.filename,
-                    "url": primary_asset.url,
-                    "expected_size": primary_asset.expected_size,
-                    "file_type": primary_asset.file_type
-                },
-                "total_assets": len(package.assets),
-                "metadata": package.metadata
-            }, ensure_ascii=False, indent=2))
-        else:
-            table = Table(title="Extracted Asset Package (Dry-Run)")
-            table.add_column("Property", style="cyan")
-            table.add_column("Value", style="white")
-            table.add_row("Platform", package.platform)
-            table.add_row("Title", package.title)
-            table.add_row("Primary File", primary_asset.filename)
-            table.add_row("Expected Size", f"{primary_asset.expected_size or 'Unknown'} bytes")
-            table.add_row("Direct Download URL", primary_asset.url[:80] + ("..." if len(primary_asset.url) > 80 else ""))
-            console.print(table)
-        sys.exit(0)
+        return {
+            "status": "dry_run",
+            "platform": package.platform,
+            "title": package.title,
+            "primary_asset": {
+                "filename": primary_asset.filename,
+                "url": primary_asset.url,
+                "expected_size": primary_asset.expected_size,
+                "file_type": primary_asset.file_type
+            },
+            "total_assets": len(package.assets),
+            "metadata": package.metadata
+        }
 
-    # 4. Resolve Output Directory (Workspace sensing -> OS Native Downloads)
+    # Resolve output directory
     base_dir = resolve_output_directory(output_dir, title=package.title, create_subfolder=True)
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    # 4.1 Smart File Renaming (Refuse meaningless digits and generic names)
+    # Smart file naming
     clean_title = sanitize_filename(package.title, max_length=70)
     raw_ext = Path(primary_asset.filename).suffix
     if not raw_ext:
-        raw_ext = ".mp4"
+        raw_ext = ".m4a" if audio_only else ".mp4"
 
     is_generic_name = (
         primary_asset.filename.startswith("content.") or 
         primary_asset.filename.startswith("article.") or
         primary_asset.filename.startswith("video.") or
-        primary_asset.filename[0].isdigit()
+        (len(primary_asset.filename) > 0 and primary_asset.filename[0].isdigit())
     )
     if is_generic_name and clean_title and clean_title != "untitled_asset":
         primary_asset.filename = f"{clean_title}{raw_ext}"
 
-    # 5. Fetch Primary Asset
     fetcher = Fetcher(FetcherOptions(
         max_bytes=max_mb * 1024 * 1024,
         chunk_size=65536,
@@ -184,53 +134,51 @@ def main(
     ))
 
     dest_file = base_dir / primary_asset.filename
-    try:
-        if not agent_mode:
-            with Progress(
-                TextColumn("[bold blue]{task.fields[filename]}", justify="left"),
-                BarColumn(bar_width=40),
-                "[progress.percentage]{task.percentage:>3.1f}%",
-                "•",
-                DownloadColumn(),
-                "•",
-                TransferSpeedColumn(),
-                "•",
-                TimeRemainingColumn(),
-                console=console
-            ) as progress:
-                task_id = progress.add_task(
-                    "download",
-                    filename=primary_asset.filename,
-                    total=primary_asset.expected_size or 0
-                )
 
-                def update_progress(current, total):
-                    if total and progress.tasks[task_id].total != total:
-                        progress.update(task_id, total=total)
-                    progress.update(task_id, completed=current)
+    # Fetch Primary Asset
+    if not agent_mode:
+        with Progress(
+            TextColumn("[bold blue]{task.fields[filename]}", justify="left"),
+            BarColumn(bar_width=40),
+            "[progress.percentage]{task.percentage:>3.1f}%",
+            "•",
+            DownloadColumn(),
+            "•",
+            TransferSpeedColumn(),
+            "•",
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            task_id = progress.add_task(
+                "download",
+                filename=primary_asset.filename,
+                total=primary_asset.expected_size or 0
+            )
 
-                downloaded_size = fetcher.download(
-                    url=primary_asset.url,
-                    dest_path=dest_file,
-                    headers=primary_asset.headers,
-                    expected_size=primary_asset.expected_size,
-                    progress_callback=update_progress
-                )
-        else:
+            def update_progress(current, total):
+                if total and progress.tasks[task_id].total != total:
+                    progress.update(task_id, total=total)
+                progress.update(task_id, completed=current)
+
             downloaded_size = fetcher.download(
                 url=primary_asset.url,
                 dest_path=dest_file,
                 headers=primary_asset.headers,
-                expected_size=primary_asset.expected_size
+                expected_size=primary_asset.expected_size,
+                progress_callback=update_progress
             )
-        primary_asset.local_path = dest_file
-        primary_asset.downloaded_bytes = downloaded_size
+    else:
+        downloaded_size = fetcher.download(
+            url=primary_asset.url,
+            dest_path=dest_file,
+            headers=primary_asset.headers,
+            expected_size=primary_asset.expected_size
+        )
 
-    except Exception as e:
-        _handle_error(e, agent_mode)
-        sys.exit(1)
+    primary_asset.local_path = dest_file
+    primary_asset.downloaded_bytes = downloaded_size
 
-    # 6. Fetch Companion Assets (e.g. Cover Image, Subtitles)
+    # Fetch Companions (Cover, Subtitles, etc.)
     cover_filename = None
     subtitle_filename = None
     for companion in package.assets:
@@ -257,24 +205,49 @@ def main(
             if verbose and not agent_mode:
                 console.print(f"[dim yellow]Warning: Failed to fetch companion {companion.filename}: {e}[/dim yellow]")
 
-    # 7. Rigorous Verification
+    # Audio-only post-processing if primary asset is a video
+    if audio_only and dest_file.suffix.lower() in VIDEO_EXTENSIONS:
+        if not agent_mode:
+            console.print("[dim cyan]🎵 提取纯音频流中 (FFmpeg)...[/dim cyan]")
+        extracted_audio = _extract_audio_from_video(dest_file)
+        if extracted_audio and extracted_audio.exists():
+            dest_file = extracted_audio
+            primary_asset.filename = dest_file.name
+            primary_asset.local_path = dest_file
+            downloaded_size = dest_file.stat().st_size
+            primary_asset.downloaded_bytes = downloaded_size
+
+    # Rigorous Verification
     verification = Verifier.verify(
         dest_file,
-        expected_size=primary_asset.expected_size,
+        expected_size=primary_asset.expected_size if not audio_only else None,
         expected_ext=dest_file.suffix
     )
 
     if not verification.valid:
-        ver_err = DAError(
+        raise DAError(
             f"Verification failed for {primary_asset.filename}: {verification.error_message}",
             details={"verification": verification.__dict__}
         )
-        _handle_error(ver_err, agent_mode)
-        sys.exit(1)
 
     primary_asset.verified = True
 
-    # 8. Sidecar Generation
+    # Automatic Archive Unpacking (with auto password support)
+    extracted_files = []
+    if auto_unzip and Unpacker.is_archive(dest_file):
+        if not agent_mode:
+            console.print(f"[dim cyan]📦 检测到压缩归档，正在自动解压提取 (密码: {clean_input.password or '无'})...[/dim cyan]")
+        extract_dest = base_dir / f"extracted_{clean_title}"
+        extracted_files = Unpacker.unpack(
+            archive_path=dest_file,
+            dest_dir=extract_dest,
+            password=clean_input.password
+        )
+        if extracted_files:
+            package.metadata["extracted_files"] = [str(f.name) for f in extracted_files]
+            package.metadata["extracted_count"] = len(extracted_files)
+
+    # Sidecar Generation
     sidecar_paths = {}
     if not no_sidecar:
         sidecar_paths = SidecarWriter.write_sidecars(
@@ -285,54 +258,240 @@ def main(
             subtitle_filename=subtitle_filename
         )
 
-    # 9. Driver Post-Download Cleanup Hook (e.g. Cloud Drive zero-trace deletion)
+    # Post-download Cleanup Hook (Zero-trace cloud deletion)
     try:
         driver.cleanup(package)
     except Exception as e:
         if verbose and not agent_mode:
             console.print(f"[dim yellow]Warning: Cleanup hook failed: {e}[/dim yellow]")
 
-    # 10. Deliver Success Output
-    if agent_mode:
-        sidecar_dict = {k: str(v.resolve()) for k, v in sidecar_paths.items()}
-        if cover_filename:
-            sidecar_dict["cover"] = str((base_dir / cover_filename).resolve())
-        if subtitle_filename:
-            sidecar_dict["subtitle"] = str((base_dir / subtitle_filename).resolve())
+    sidecar_dict = {k: str(v.resolve()) for k, v in sidecar_paths.items()}
+    if cover_filename and (base_dir / cover_filename).exists():
+        sidecar_dict["cover"] = str((base_dir / cover_filename).resolve())
+    if subtitle_filename and (base_dir / subtitle_filename).exists():
+        sidecar_dict["subtitle"] = str((base_dir / subtitle_filename).resolve())
 
-        agent_result = {
-            "status": "success",
-            "platform": package.platform,
-            "title": package.title,
-            "output_dir": str(base_dir.resolve()),
-            "primary_asset": str(dest_file.resolve()),
-            "size_bytes": downloaded_size,
-            "sidecars": sidecar_dict,
-            "verification": {
-                "valid": verification.valid,
-                "detected_type": verification.detected_type,
-                "details": verification.details
-            }
+    return {
+        "status": "success",
+        "platform": package.platform,
+        "title": package.title,
+        "output_dir": str(base_dir.resolve()),
+        "primary_asset": str(dest_file.resolve()),
+        "size_bytes": downloaded_size,
+        "sidecars": sidecar_dict,
+        "extracted_files": [str(p.resolve()) for p in extracted_files] if extracted_files else [],
+        "verification": {
+            "valid": verification.valid,
+            "detected_type": verification.detected_type,
+            "details": verification.details
         }
-        print(json.dumps(agent_result, ensure_ascii=False, indent=2))
-    else:
-        success_table = Table(show_header=False, box=None)
-        success_table.add_row("[bold green]✔[/bold green] [bold]Primary Asset:[/bold]", str(dest_file.resolve()))
-        success_table.add_row("[bold green]✔[/bold green] [bold]Verified Format:[/bold]", f"{verification.detected_type} ({downloaded_size / (1024*1024):.2f} MB)")
-        success_table.add_row("[bold green]✔[/bold green] [bold]Asset Folder:[/bold]", str(base_dir.resolve()))
-        if sidecar_paths:
-            success_table.add_row("[bold green]✔[/bold green] [bold]Sidecars:[/bold]", "content.info.json, content.md")
+    }
 
-        console.print(Panel(
-            success_table,
-            title="[bold green]Download Complete & Verified[/bold green]",
-            border_style="green"
+
+@click.command()
+@click.argument("targets", nargs=-1)
+@click.option("-i", "--input-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Batch download URLs from a file (one per line)")
+@click.option("-o", "--output-dir", help="Output directory path (default: ~/Downloads/DA/<folder>)")
+@click.option("-p", "--password", help="Explicit password/passcode if not embedded in input")
+@click.option("-a", "--audio", "--audio-only", is_flag=True, help="Extract audio-only stream (.mp3/.m4a) to save bandwidth and storage")
+@click.option("--unzip/--no-unzip", default=True, help="Automatically extract password-protected or standard archives upon download (default: True)")
+@click.option("--max-mb", default=500, type=int, help="Maximum allowed file size in MB (default: 500)")
+@click.option("--check", is_flag=True, help="Dry run: inspect and extract metadata without downloading")
+@click.option("--no-sidecar", is_flag=True, help="Disable generating sidecar metadata (.info.json and .md)")
+@click.option("--json", "agent_mode", is_flag=True, help="Agent mode: output JSON result to stdout")
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logs")
+def main(
+    targets: Tuple[str, ...],
+    input_file: Optional[Path],
+    output_dir: Optional[str],
+    password: Optional[str],
+    audio: bool,
+    unzip: bool,
+    max_mb: int,
+    check: bool,
+    no_sidecar: bool,
+    agent_mode: bool,
+    verbose: bool
+):
+    """
+    Download Anything (DA) - High-density micro-asset extraction & offline archiving hub.
+    Input can be a URL, mobile share text, book MD5, or batch file (-i links.txt).
+    """
+    targets_list = list(targets)
+
+    # 1. Handle special subcommands
+    if len(targets_list) >= 1 and targets_list[0] in ("login", "auth"):
+        platform_name = (targets_list[1] if len(targets_list) > 1 else "quark").lower()
+        _handle_login(platform_name)
+        sys.exit(0)
+
+    if len(targets_list) >= 1 and targets_list[0] in ("doctor", "check-env", "diagnose"):
+        sub = targets_list[1] if len(targets_list) > 1 else None
+        _handle_doctor(sub, agent_mode)
+        sys.exit(0)
+
+    # 2. Collect input targets from input_file or clipboard
+    if input_file:
+        try:
+            with open(input_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    if s and not s.startswith("#"):
+                        targets_list.append(s)
+        except Exception as e:
+            _handle_error(e, agent_mode)
+            sys.exit(1)
+
+    if not targets_list:
+        # Check system clipboard on macOS if available and in interactive human mode
+        if sys.platform == "darwin" and not agent_mode:
+            try:
+                clip = subprocess.check_output(["pbpaste"], text=True, timeout=1).strip()
+                if clip and ("http://" in clip or "https://" in clip or re.search(r"\b[0-9a-fA-F]{32}\b", clip) or re.search(r"\b[0-9]{4}\.[0-9]{4,5}\b", clip)):
+                    console.print(f"[dim cyan]📋 Detected input from clipboard:[/dim cyan] [dim]{clip[:80]}...[/dim]")
+                    targets_list.append(clip)
+            except Exception:
+                pass
+
+    if not targets_list:
+        if agent_mode:
+            print(json.dumps({"status": "error", "message": "No target URL, text, or input file provided"}, ensure_ascii=False))
+            sys.exit(1)
+        console.print("[bold red]Error:[/bold red] Please provide a target URL, share text, or batch file (-i).")
+        console.print("Usage: [bold green]da \"<URL or share text>\"[/bold green] or [bold green]da -i links.txt[/bold green]")
+        sys.exit(1)
+
+    # Output banner for Human mode
+    if not agent_mode and not check:
+        console.print(Panel.fit(
+            "[bold cyan]Download Anything[/bold cyan] [dim](DA v0.1.0)[/dim]\n"
+            f"[dim]Universal Micro-Asset Extraction Hub ({len(targets_list)} target{'s' if len(targets_list) > 1 else ''})[/dim]",
+            border_style="cyan"
         ))
+
+    # Single Download Flow
+    if len(targets_list) == 1:
+        single_target = targets_list[0]
+        try:
+            res = process_download(
+                target_text=single_target,
+                output_dir=output_dir,
+                password=password,
+                max_mb=max_mb,
+                check=check,
+                no_sidecar=no_sidecar,
+                agent_mode=agent_mode,
+                verbose=verbose,
+                audio_only=audio,
+                auto_unzip=unzip
+            )
+        except Exception as e:
+            _handle_error(e, agent_mode)
+            sys.exit(1)
+
+        if agent_mode:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        elif check:
+            table = Table(title="Extracted Asset Package (Dry-Run)")
+            table.add_column("Property", style="cyan")
+            table.add_column("Value", style="white")
+            table.add_row("Platform", res["platform"])
+            table.add_row("Title", res["title"])
+            table.add_row("Primary File", res["primary_asset"]["filename"])
+            table.add_row("Expected Size", f"{res['primary_asset']['expected_size'] or 'Unknown'} bytes")
+            table.add_row("Direct Download URL", res["primary_asset"]["url"][:80] + ("..." if len(res["primary_asset"]["url"]) > 80 else ""))
+            console.print(table)
+        else:
+            success_table = Table(show_header=False, box=None)
+            success_table.add_row("[bold green]✔[/bold green] [bold]Primary Asset:[/bold]", res["primary_asset"])
+            success_table.add_row("[bold green]✔[/bold green] [bold]Verified Format:[/bold]", f"{res['verification']['detected_type']} ({res['size_bytes'] / (1024*1024):.2f} MB)")
+            success_table.add_row("[bold green]✔[/bold green] [bold]Asset Folder:[/bold]", res["output_dir"])
+            if res.get("sidecars"):
+                success_table.add_row("[bold green]✔[/bold green] [bold]Sidecars:[/bold]", "content.info.json, content.md")
+            if res.get("extracted_files"):
+                success_table.add_row("[bold green]✔[/bold green] [bold]Auto-Unpacked:[/bold]", f"Extracted {len(res['extracted_files'])} files")
+
+            console.print(Panel(
+                success_table,
+                title="[bold green]Download Complete & Verified[/bold green]",
+                border_style="green"
+            ))
+        sys.exit(0)
+
+    # Batch Download Flow (Multiple Targets)
+    results = []
+    success_count = 0
+    total = len(targets_list)
+
+    for idx, target in enumerate(targets_list, 1):
+        if not agent_mode:
+            console.print(f"\n[bold cyan]─── [{idx}/{total}] Processing: {target[:60]}... ───[/bold cyan]")
+        try:
+            item_res = process_download(
+                target_text=target,
+                output_dir=output_dir,
+                password=password,
+                max_mb=max_mb,
+                check=check,
+                no_sidecar=no_sidecar,
+                agent_mode=agent_mode,
+                verbose=verbose,
+                audio_only=audio,
+                auto_unzip=unzip
+            )
+            item_res["target"] = target
+            results.append(item_res)
+            success_count += 1
+            if not agent_mode:
+                console.print(f"[bold green]✔ [{idx}/{total}] Success:[/bold green] {item_res.get('title', 'Done')}")
+        except Exception as e:
+            err_dict = {
+                "status": "error",
+                "target": target,
+                "error_type": type(e).__name__,
+                "message": str(e)
+            }
+            results.append(err_dict)
+            if not agent_mode:
+                console.print(f"[bold red]✘ [{idx}/{total}] Failed:[/bold red] {e}")
+
+    if agent_mode:
+        batch_output = {
+            "batch": True,
+            "total": total,
+            "success_count": success_count,
+            "results": results
+        }
+        print(json.dumps(batch_output, ensure_ascii=False, indent=2))
+    else:
+        summary_table = Table(title=f"Batch Download Summary ({success_count}/{total} Successful)", border_style="cyan")
+        summary_table.add_column("#", justify="center")
+        summary_table.add_column("Status", justify="center")
+        summary_table.add_column("Title / Target")
+        summary_table.add_column("Details")
+
+        for idx, r in enumerate(results, 1):
+            if r.get("status") == "success":
+                summary_table.add_row(
+                    str(idx),
+                    "[bold green]✔ OK[/bold green]",
+                    r.get("title") or r.get("target") or "N/A",
+                    f"{r.get('size_bytes', 0)/(1024*1024):.2f} MB"
+                )
+            else:
+                summary_table.add_row(
+                    str(idx),
+                    "[bold red]✘ Fail[/bold red]",
+                    r.get("target") or "N/A",
+                    r.get("message") or "Unknown error"
+                )
+        console.print(summary_table)
+
+    sys.exit(0 if success_count > 0 else 1)
+
 
 def _handle_login(platform: str):
     """Automated login helper: harvests from browser or triggers headless capture."""
-    import shutil
-    import subprocess
     from core.credentials import credentials_manager
 
     platform = platform.lower()
@@ -388,6 +547,7 @@ def _handle_login(platform: str):
             "da 就能永久静默自动读取 Chrome/Safari 中的百度/夸克 Cookie，无需任何操作！"
         )
 
+
 def _handle_doctor(subtarget: Optional[str], agent_mode: bool):
     """Diagnose Python environment, dependencies, and external utilities."""
     from core.doctor import Doctor
@@ -436,6 +596,7 @@ def _handle_doctor(subtarget: Optional[str], agent_mode: bool):
         console.print("[bold green]✔ 所有核心环境与依赖均已就绪，运行状态良好！[/bold green]")
         sys.exit(0)
 
+
 def _handle_error(err: Exception, agent_mode: bool):
     """Deliver uniform error outputs for human CLI and agent skill."""
     err_type = type(err).__name__
@@ -452,6 +613,7 @@ def _handle_error(err: Exception, agent_mode: bool):
             title="[bold red]Operation Failed[/bold red]",
             border_style="red"
         ))
+
 
 if __name__ == "__main__":
     main()
