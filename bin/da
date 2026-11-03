@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Download Anything (DA) CLI Launcher
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# 1. Prefer local virtual environment if present
+if [[ -f "$PROJECT_ROOT/.venv/bin/python" ]]; then
+    exec "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/cli.py" "$@"
+fi
+
+# 2. Fallback to uv run if uv is installed
+if command -v uv >/dev/null 2>&1; then
+    exec uv run --directory "$PROJECT_ROOT" da "$@"
+fi
+
+# 3. Fallback to system python3
+exec python3 "$PROJECT_ROOT/cli.py" "$@"

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "download-anything"
+version = "0.1.0"
+description = "High-density micro-asset (<500MB) extraction and offline archiving hub"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Download Anything Contributors" }
+]
+dependencies = [
+    "click>=8.1.7",
+    "rich>=13.7.1",
+    "requests>=2.31.0",
+    "pyyaml>=6.0.1",
+    "beautifulsoup4>=4.12.3",
+    "pypdf>=4.2.0",
+    "pillow>=10.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-mock>=3.14.0",
+]
+
+[project.scripts]
+da = "cli:main"
+dl = "cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core", "drivers"]
+extra-dependencies = []
