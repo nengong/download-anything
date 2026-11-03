@@ -39,9 +39,25 @@ class Fetcher:
         """
         Download remote stream to dest_path with resume support, size guard,
         and automatic curl failover for tough CDN endpoints.
+        Supports data: and file: URIs seamlessly.
         Returns total bytes downloaded.
         """
         dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Handle data: URI directly
+        if url.startswith("data:"):
+            import base64
+            import urllib.parse
+            header, encoded = url.split(",", 1) if "," in url else ("", "")
+            if ";base64" in header:
+                content = base64.b64decode(encoded)
+            else:
+                content = urllib.parse.unquote_to_bytes(encoded)
+            dest_path.write_bytes(content)
+            if progress_callback:
+                progress_callback(len(content), len(content))
+            return len(content)
+
         part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
         req_headers = {

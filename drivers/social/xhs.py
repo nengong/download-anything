@@ -32,7 +32,7 @@ class XiaohongshuDriver(BaseDriver):
     IMG_VIEW = "imageView2/2/w/0/format/jpg/v3"
 
     def can_handle(self, url: str) -> bool:
-        return "xhslink.com" in url or "xiaohongshu.com" in url
+        return "xhslink.com" in url or "xhslink.cn" in url or "xiaohongshu.com" in url
 
     def extract(self, url: str, **kwargs) -> AssetPackage:
         session = requests.Session()
