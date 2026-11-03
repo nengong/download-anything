@@ -55,6 +55,18 @@ def main(
     Input can be a URL, mobile share text, or book MD5.
     """
     if not target:
+        # Check system clipboard on macOS if available and in interactive human mode
+        if sys.platform == "darwin" and not agent_mode:
+            try:
+                import subprocess
+                clip = subprocess.check_output(["pbpaste"], text=True, timeout=1).strip()
+                if clip and ("http://" in clip or "https://" in clip or re.search(r"\b[0-9a-fA-F]{32}\b", clip) or re.search(r"\b[0-9]{4}\.[0-9]{4,5}\b", clip)):
+                    console.print(f"[dim cyan]📋 Detected input from clipboard:[/dim cyan] [dim]{clip[:80]}...[/dim]")
+                    target = clip
+            except Exception:
+                pass
+
+    if not target:
         if agent_mode:
             print(json.dumps({"status": "error", "message": "No target URL or text provided"}, ensure_ascii=False))
             sys.exit(1)

@@ -12,6 +12,7 @@ from drivers.social.bilibili import BilibiliDriver
 from drivers.dev.github_dir import GitHubDirDriver
 from drivers.audio.xiaoyuzhou import XiaoyuzhouDriver
 from drivers.docs.wechat import WeChatDriver
+from drivers.books.arxiv import ArxivDriver
 
 def get_default_drivers() -> List[BaseDriver]:
     """Return an instantiated list of all active drivers in priority order."""
@@ -19,6 +20,7 @@ def get_default_drivers() -> List[BaseDriver]:
         LanzouDriver(),
         QuarkDriver(),
         ShadowLibraryDriver(),
+        ArxivDriver(),
         XiaohongshuDriver(),
         DouyinDriver(),
         BilibiliDriver(),
