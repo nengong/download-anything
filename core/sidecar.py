@@ -107,4 +107,17 @@ class SidecarWriter:
             f.write("\n".join(md_lines))
         sidecars["markdown"] = md_path
 
+        # If primary_filename is named after the title (e.g. "Title.mp4"), also mirror named sidecars
+        if primary_filename and primary_filename != "content.mp4":
+            base_stem = Path(primary_filename).stem
+            if base_stem and base_stem != "content":
+                named_info = dest_dir / f"{base_stem}.info.json"
+                named_md = dest_dir / f"{base_stem}.md"
+                with open(named_info, "w", encoding="utf-8") as f:
+                    json.dump(info_data, f, ensure_ascii=False, indent=2)
+                with open(named_md, "w", encoding="utf-8") as f:
+                    f.write("\n".join(md_lines))
+                sidecars["named_info_json"] = named_info
+                sidecars["named_markdown"] = named_md
+
         return sidecars

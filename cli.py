@@ -20,6 +20,7 @@ from core.fetcher import Fetcher, FetcherOptions
 from core.router import Router
 from core.sidecar import SidecarWriter
 from core.verifier import Verifier
+from core.path_resolver import resolve_output_directory, sanitize_filename, get_system_downloads_dir
 from drivers import get_default_drivers
 from drivers.base import AssetPackage, TargetAsset
 
@@ -59,6 +60,10 @@ def main(
     if target in ("login", "auth"):
         platform_name = (subtarget or "quark").lower()
         _handle_login(platform_name)
+        sys.exit(0)
+
+    if target in ("doctor", "check-env", "diagnose"):
+        _handle_doctor(subtarget, agent_mode)
         sys.exit(0)
 
     if not target:
@@ -152,15 +157,24 @@ def main(
             console.print(table)
         sys.exit(0)
 
-    # 4. Resolve Output Directory
-    date_prefix = datetime.now().strftime("%Y-%m-%d")
-    folder_name = f"{date_prefix}_{sanitize_folder_name(package.title)}"
-    if output_dir:
-        base_dir = Path(os.path.expanduser(output_dir))
-    else:
-        base_dir = Path.home() / "Downloads" / "DA" / folder_name
-
+    # 4. Resolve Output Directory (Workspace sensing -> OS Native Downloads)
+    base_dir = resolve_output_directory(output_dir, title=package.title, create_subfolder=True)
     base_dir.mkdir(parents=True, exist_ok=True)
+
+    # 4.1 Smart File Renaming (Refuse meaningless digits and generic names)
+    clean_title = sanitize_filename(package.title, max_length=70)
+    raw_ext = Path(primary_asset.filename).suffix
+    if not raw_ext:
+        raw_ext = ".mp4"
+
+    is_generic_name = (
+        primary_asset.filename.startswith("content.") or 
+        primary_asset.filename.startswith("article.") or
+        primary_asset.filename.startswith("video.") or
+        primary_asset.filename[0].isdigit()
+    )
+    if is_generic_name and clean_title and clean_title != "untitled_asset":
+        primary_asset.filename = f"{clean_title}{raw_ext}"
 
     # 5. Fetch Primary Asset
     fetcher = Fetcher(FetcherOptions(
@@ -222,6 +236,14 @@ def main(
     for companion in package.assets:
         if companion.file_type == "primary":
             continue
+        comp_ext = Path(companion.filename).suffix
+        if companion.file_type == "cover":
+            companion.filename = f"{clean_title}.cover{comp_ext or '.jpg'}" if clean_title != "untitled_asset" else "cover.jpg"
+            cover_filename = companion.filename
+        elif companion.file_type == "subtitle":
+            companion.filename = f"{clean_title}.subtitle{comp_ext or '.srt'}" if clean_title != "untitled_asset" else "subtitle.srt"
+            subtitle_filename = companion.filename
+
         comp_dest = base_dir / companion.filename
         try:
             fetcher.download(
@@ -231,10 +253,6 @@ def main(
                 expected_size=companion.expected_size
             )
             companion.local_path = comp_dest
-            if companion.file_type == "cover":
-                cover_filename = companion.filename
-            elif companion.file_type == "subtitle":
-                subtitle_filename = companion.filename
         except Exception as e:
             if verbose and not agent_mode:
                 console.print(f"[dim yellow]Warning: Failed to fetch companion {companion.filename}: {e}[/dim yellow]")
@@ -369,6 +387,54 @@ def _handle_login(platform: str):
             "在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选当前终端/IDE，\n"
             "da 就能永久静默自动读取 Chrome/Safari 中的百度/夸克 Cookie，无需任何操作！"
         )
+
+def _handle_doctor(subtarget: Optional[str], agent_mode: bool):
+    """Diagnose Python environment, dependencies, and external utilities."""
+    from core.doctor import Doctor
+    fix = (subtarget in ("--fix", "-f") or "--fix" in sys.argv)
+    if fix:
+        if not agent_mode:
+            console.print("[bold yellow]正在自动修复缺失的 Python 依赖包...[/bold yellow]")
+        Doctor.auto_repair()
+
+    report = Doctor.check_all()
+    if agent_mode:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        sys.exit(0 if report["all_required_ok"] else 1)
+
+    table = Table(title="Download Anything (DA) 环境与依赖诊断报告", border_style="cyan")
+    table.add_column("组件 / 工具", style="bold cyan")
+    table.add_column("状态", justify="center")
+    table.add_column("版本 / 路径", style="dim")
+    table.add_column("说明", style="white")
+
+    py_status = "[bold green]✔ 就绪[/bold green]" if report["python_version"]["ok"] else "[bold red]✘ 版本过低[/bold red]"
+    table.add_row("Python 运行时", py_status, report["python_version"]["version"], f"要求 {report['python_version']['required']}")
+
+    for name, item in report["dependencies"].items():
+        status = "[bold green]✔ 就绪[/bold green]" if item["installed"] else "[bold red]✘ 缺失[/bold red]"
+        table.add_row(item["pip_name"].split(">=")[0], status, item["version"] or "-", item["description"])
+
+    for name, item in report["external_tools"].items():
+        status = "[bold green]✔ 就绪[/bold green]" if item["installed"] else ("[dim yellow]可选[/dim yellow]" if not item["required"] else "[bold red]✘ 缺失[/bold red]")
+        table.add_row(name, status, item["path"] or "-", item["description"])
+
+    if report.get("mac_fda"):
+        fda_status = "[bold green]✔ 已启用[/bold green]" if report["mac_fda"]["enabled"] else "[dim yellow]未授权(可选)[/dim yellow]"
+        table.add_row("macOS 完全磁盘访问", fda_status, "-", report["mac_fda"]["description"])
+
+    console.print(table)
+    if not report["all_required_ok"]:
+        console.print(Panel(
+            "[bold yellow]检测到有缺失的核心依赖！[/bold yellow]\n"
+            "你可以直接运行 [bold green]da doctor --fix[/bold green] 一键全自动补全安装，\n"
+            "或者在当前目录运行: [cyan]uv pip install -e .[/cyan] 或 [cyan]pip install -e .[/cyan]",
+            border_style="yellow"
+        ))
+        sys.exit(1)
+    else:
+        console.print("[bold green]✔ 所有核心环境与依赖均已就绪，运行状态良好！[/bold green]")
+        sys.exit(0)
 
 def _handle_error(err: Exception, agent_mode: bool):
     """Deliver uniform error outputs for human CLI and agent skill."""
