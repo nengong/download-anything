@@ -10,6 +10,7 @@ from drivers.social.weibo import WeiboDriver
 from drivers.audio.apple_podcasts import ApplePodcastsDriver
 from drivers.books.novel import NovelDriver
 from drivers.books.doi import DOIDriver
+from drivers.software.ms_store import MicrosoftStoreDriver
 
 def test_youtube_driver_can_handle():
     driver = YouTubeDriver()
@@ -55,3 +56,10 @@ def test_doi_driver_can_handle():
     assert driver.can_handle("doi:10.1360/SSV-2023-0180")
     assert driver.can_handle("10.1145/3372278.3390678")
     assert not driver.can_handle("https://youtube.com/watch?v=123")
+
+def test_ms_store_driver_can_handle():
+    driver = MicrosoftStoreDriver()
+    assert driver.can_handle("https://apps.microsoft.com/detail/9nt1r1c2hh7j")
+    assert driver.can_handle("https://www.microsoft.com/store/productId/9N0DX20HK701")
+    assert driver.can_handle("9nt1r1c2hh7j")
+    assert not driver.can_handle("https://github.com/torvalds/linux")

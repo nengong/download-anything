@@ -144,4 +144,5 @@ da login quark     # 夸克网盘凭据一键捕获
 | | `shadow_library` | MD5 哈希、`annas-archive.*`, `libgen.*` | 全本中文出版书/网络小说/外文专著，断点续传不超时 |
 | | `novel` | 笔趣阁/69书吧等小说目录页 | 自动解析目录、并发抓取章节、过滤广告并汇编为结构化小说 |
 | | `arxiv` | `arxiv.org/abs/...`, `arxiv.org/pdf/...` | 论文 PDF + 官方 BibTeX 伴生项 |
-| **开发设计** | `github` | `github.com/{owner}/{repo}/(tree\|blob)/...` | 单目录/单文件精准抓取，免全量 `git clone` |
+| **开发与软件** | `github` | `github.com/{owner}/{repo}/(tree\|blob)/...` | 单目录/单文件精准抓取，免全量 `git clone` |
+| | `ms_store` | `apps.microsoft.com/detail/...` (微软商店链接/PID) | 提取官方原版受信任 `.msixbundle` / `.appxbundle` 离线安装包，免登录直接安装 |
