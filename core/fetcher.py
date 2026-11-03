@@ -79,6 +79,7 @@ class Fetcher:
                 existing_bytes = 0
 
         # Attempt download with requests first
+        active_url = url
         last_error = None
         for attempt in range(1, self.options.max_retries + 1):
             try:
@@ -87,7 +88,7 @@ class Fetcher:
                     attempt_headers["Range"] = f"bytes={existing_bytes}-"
 
                 with requests.get(
-                    url,
+                    active_url,
                     headers=attempt_headers,
                     stream=True,
                     timeout=(15, self.options.inactivity_timeout),
@@ -153,9 +154,21 @@ class Fetcher:
                 raise
             except Exception as e:
                 last_error = e
-                # Update existing_bytes for possible resume on next retry
-                if part_path.exists():
-                    existing_bytes = part_path.stat().st_size
+                # Check for domestic mirror failover when foreign link times out
+                try:
+                    from core.mirror_router import MirrorRouter
+                    candidate_mirrors = MirrorRouter.get_mirrors(url)
+                    if candidate_mirrors and attempt <= len(candidate_mirrors):
+                        active_url = candidate_mirrors[attempt - 1]
+                        if part_path.exists():
+                            part_path.unlink(missing_ok=True)
+                            existing_bytes = 0
+                    else:
+                        if part_path.exists():
+                            existing_bytes = part_path.stat().st_size
+                except Exception:
+                    if part_path.exists():
+                        existing_bytes = part_path.stat().st_size
                 time.sleep(1.0 * attempt)
 
         # 2. Seamless failover to native curl if requests struggled
