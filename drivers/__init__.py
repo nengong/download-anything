@@ -5,6 +5,7 @@ from typing import List
 from drivers.base import BaseDriver
 from drivers.pan.lanzou import LanzouDriver
 from drivers.pan.quark import QuarkDriver
+from drivers.pan.baidu import BaiduDriver
 from drivers.books.shadow_library import ShadowLibraryDriver
 from drivers.social.xhs import XiaohongshuDriver
 from drivers.social.douyin import DouyinDriver
@@ -19,6 +20,7 @@ def get_default_drivers() -> List[BaseDriver]:
     return [
         LanzouDriver(),
         QuarkDriver(),
+        BaiduDriver(),
         ShadowLibraryDriver(),
         ArxivDriver(),
         XiaohongshuDriver(),

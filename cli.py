@@ -33,6 +33,7 @@ def sanitize_folder_name(name: str) -> str:
 
 @click.command()
 @click.argument("target", required=False)
+@click.argument("subtarget", required=False)
 @click.option("-o", "--output-dir", help="Output directory path (default: ~/Downloads/DA/<folder>)")
 @click.option("-p", "--password", help="Explicit password/passcode if not embedded in input")
 @click.option("--max-mb", default=500, type=int, help="Maximum allowed file size in MB (default: 500)")
@@ -42,6 +43,7 @@ def sanitize_folder_name(name: str) -> str:
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logs")
 def main(
     target: Optional[str],
+    subtarget: Optional[str],
     output_dir: Optional[str],
     password: Optional[str],
     max_mb: int,
@@ -54,6 +56,11 @@ def main(
     Download Anything (DA) - High-density micro-asset extraction & offline archiving hub.
     Input can be a URL, mobile share text, or book MD5.
     """
+    if target in ("login", "auth"):
+        platform_name = (subtarget or "quark").lower()
+        _handle_login(platform_name)
+        sys.exit(0)
+
     if not target:
         # Check system clipboard on macOS if available and in interactive human mode
         if sys.platform == "darwin" and not agent_mode:
@@ -303,6 +310,65 @@ def main(
             title="[bold green]Download Complete & Verified[/bold green]",
             border_style="green"
         ))
+
+def _handle_login(platform: str):
+    """Automated login helper: harvests from browser or triggers headless capture."""
+    import shutil
+    import subprocess
+    from core.credentials import credentials_manager
+
+    platform = platform.lower()
+    console.print(Panel(
+        f"[bold cyan]正在自动探测 {platform} 登录凭据...[/bold cyan]\n"
+        "[dim]优先尝试从本地 Chrome/Safari/Edge 浏览器提取...[/dim]",
+        border_style="cyan"
+    ))
+
+    # 1. Check if rookiepy can get it directly from browsers
+    domains = credentials_manager.PLATFORM_DOMAINS.get(platform, [f"{platform}.com"])
+    cookie = credentials_manager._harvest_from_browsers(domains)
+    if cookie:
+        credentials_manager.save_credential(platform, cookie)
+        console.print(Panel(
+            f"[bold green]✔ 成功直接从默认浏览器中捕获到 {platform} 的登录 Cookie！已自动保存。[/bold green]\n"
+            "[dim]现在直接运行 da \"<网盘链接>\" 即可免登极速下载。[/dim]",
+            border_style="green"
+        ))
+        return
+
+    # 2. Check native desktop app databases
+    cookie = credentials_manager._harvest_from_desktop_apps(platform)
+    if cookie:
+        credentials_manager.save_credential(platform, cookie)
+        console.print(Panel(
+            f"[bold green]✔ 成功从本地桌面客户端数据库捕获到 {platform} 凭据！已自动保存。[/bold green]",
+            border_style="green"
+        ))
+        return
+
+    # 3. Automated Browser Capture window (zero manual copying)
+    console.print("[dim yellow]macOS 提示：默认浏览器 Cookies 受系统保护。即将弹出登录窗口，登录后脚本将自动抓取凭据，无需手动复制！[/dim yellow]")
+    login_urls = {
+        "quark": "https://pan.quark.cn/",
+        "baidu": "https://pan.baidu.com/",
+    }
+    target_url = login_urls.get(platform, f"https://pan.{platform}.com/")
+    domain = domains[0]
+
+    grab_bin = shutil.which("grab-cookie") or "/Users/c.k/coding-agent-hub/bin/grab-cookie"
+    if os.path.exists(grab_bin):
+        try:
+            cmd = [grab_bin, target_url, "--domain", domain, "--no-probe"]
+            subprocess.run(cmd)
+            console.print("[bold green]✔ 凭据捕获完成！现在可直接下载。[/bold green]")
+        except Exception as e:
+            console.print(f"[bold red]自动弹窗抓取失败: {e}[/bold red]")
+    else:
+        console.print(
+            "[bold yellow]💡 一劳永逸全自动方法：[/bold yellow]\n"
+            "在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选当前终端/IDE，\n"
+            "da 就能永久静默自动读取 Chrome/Safari 中的百度/夸克 Cookie，无需任何操作！"
+        )
 
 def _handle_error(err: Exception, agent_mode: bool):
     """Deliver uniform error outputs for human CLI and agent skill."""
