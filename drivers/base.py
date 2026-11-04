@@ -63,3 +63,12 @@ class BaseDriver(ABC):
         Used to silently delete cloud drive temporary files (e.g., Quark, Baidu).
         """
         pass
+
+    def cleanup_after_error(self, package: AssetPackage, error: BaseException) -> None:
+        """Preserve the original failure while surfacing any cleanup failure."""
+        try:
+            self.cleanup(package)
+        except Exception as cleanup_error:
+            details = dict(getattr(error, "details", {}) or {})
+            details["cleanup_error"] = str(cleanup_error)
+            error.details = details

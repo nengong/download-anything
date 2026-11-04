@@ -1,6 +1,7 @@
 """
 Bilibili (B站) Video, Audio, and CC Subtitle (.srt) Driver
 """
+import base64
 import json
 import re
 from typing import Optional, List
@@ -164,6 +165,14 @@ class BilibiliDriver(BaseDriver):
             raw_markdown=f"{desc}\n\n- **Up主**：{author_name}\n- **稿件编号**：`{bvid}`"
         )
 
+    @staticmethod
+    def _format_srt_time(seconds: float) -> str:
+        total_ms = int(round(seconds * 1000))
+        hrs, rem = divmod(total_ms, 3600000)
+        mins, rem = divmod(rem, 60000)
+        secs, ms = divmod(rem, 1000)
+        return f"{hrs:02d}:{mins:02d}:{secs:02d},{ms:03d}"
+
     def _fetch_subtitles(self, bvid: str, cid: int, session: requests.Session) -> Optional[TargetAsset]:
         """Fetch player v2 info, parse subtitle list, and convert JSON timestamps to SubRip .srt format."""
         try:
@@ -184,18 +193,30 @@ class BilibiliDriver(BaseDriver):
             if sub_url.startswith("//"):
                 sub_url = f"https:{sub_url}"
 
-            # Convert to srt directly
+            # Convert Bilibili JSON subtitle body to standard .srt format
             sub_resp = session.get(sub_url, timeout=10)
             body = sub_resp.json().get("body", [])
             if not body:
                 return None
 
-            # In DA architecture, companion can be a TargetAsset
+            srt_blocks = []
+            for idx, item in enumerate(body, 1):
+                start_t = self._format_srt_time(float(item.get("from", 0.0)))
+                end_t = self._format_srt_time(float(item.get("to", 0.0)))
+                content = str(item.get("content", "")).strip()
+                if content:
+                    srt_blocks.append(f"{idx}\n{start_t} --> {end_t}\n{content}")
+
+            if not srt_blocks:
+                return None
+
+            srt_text = "\n\n".join(srt_blocks) + "\n"
+            b64_srt = base64.b64encode(srt_text.encode("utf-8")).decode("ascii")
             return TargetAsset(
-                url=sub_url,
-                filename="subtitle.json",
+                url=f"data:text/plain;charset=utf-8;base64,{b64_srt}",
+                filename="subtitle.srt",
                 file_type="subtitle",
-                headers={"User-Agent": self.DEFAULT_HEADERS["User-Agent"]}
+                expected_size=len(srt_text.encode("utf-8"))
             )
         except Exception:
             return None

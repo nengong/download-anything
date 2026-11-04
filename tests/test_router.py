@@ -4,6 +4,7 @@ Unit Tests for Smart Router and Dirty Input Cleaner
 import pytest
 from core.router import Router, CleanInput
 from core.exceptions import UrlNotSupportedError
+from drivers import get_default_drivers
 from drivers.pan.lanzou import LanzouDriver
 from drivers.pan.quark import QuarkDriver
 from drivers.books.shadow_library import ShadowLibraryDriver
@@ -77,6 +78,33 @@ def test_shadow_library_book_title_and_prefixes(router):
     driver, cleaned = router.route("Thinking, Fast and Slow")
     assert driver.name == "shadow_library"
     assert cleaned.url == "Thinking, Fast and Slow"
+
+def test_default_drivers_do_not_hijack_non_book_identifiers():
+    full_router = Router(get_default_drivers())
+
+    # Bare arXiv ID
+    driver, _ = full_router.route("2310.06825")
+    assert driver.name == "arxiv"
+
+    # DOI with prefix and bare DOI
+    driver, _ = full_router.route("doi:10.1038/nature12373")
+    assert driver.name == "doi"
+    driver, _ = full_router.route("10.1038/nature12373")
+    assert driver.name == "doi"
+
+    # Microsoft Store Product ID
+    driver, _ = full_router.route("9nt1r1c2hh7j")
+    assert driver.name == "ms_store"
+
+    # Android APK package name and prefix
+    driver, _ = full_router.route("com.termux")
+    assert driver.name == "android_apk"
+    driver, _ = full_router.route("apk:org.videolan.vlc")
+    assert driver.name == "android_apk"
+
+    # Plain book titles still route to shadow_library
+    driver, _ = full_router.route("哲学谈话录")
+    assert driver.name == "shadow_library"
 
 def test_unsupported_url(router):
     with pytest.raises(UrlNotSupportedError):

@@ -1,11 +1,11 @@
 """
 Shadow Library (Anna's Archive & LibGen) Resilient Driver
 Supports direct MD5, Anna/LibGen links, and book title / author / ISBN search with
-conversation-aware language prioritization (Chinese / English).
+conversation-aware multi-language prioritization (zh, en, ja, ko, fr, de, es, ru, it, pt, etc.).
 """
 import os
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from urllib.parse import urlparse, quote_plus
 import requests
 from bs4 import BeautifulSoup
@@ -16,7 +16,7 @@ from drivers.base import BaseDriver, AssetPackage, TargetAsset
 class ShadowLibraryDriver(BaseDriver):
     """
     High-resilience book extractor for Anna's Archive and LibGen.
-    Supports title/author/ISBN search with language prioritization,
+    Supports title/author/ISBN search with multi-language prioritization,
     eliminates 60-second timeouts, handles dynamic token keys (ads.php -> get.php),
     and captures companion cover visuals and metadata.
     """
@@ -50,6 +50,72 @@ class ShadowLibraryDriver(BaseDriver):
 
     MD5_REGEX = re.compile(r"(?:/md5/|md5:)([a-fA-F0-9]{32})", re.IGNORECASE)
     PLAIN_MD5_REGEX = re.compile(r"^[a-fA-F0-9]{32}$")
+    RAW_ARXIV_REGEX = re.compile(r"^[0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?$", re.IGNORECASE)
+    RAW_MS_STORE_PID_REGEX = re.compile(r"^9[a-zA-Z0-9]{11}$", re.IGNORECASE)
+    ANDROID_PKG_REGEX = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
+
+    LANGUAGE_PROFILES: Dict[str, Dict[str, Any]] = {
+        "zh": {
+            "aliases": {"zh", "chinese", "cn", "zh-cn", "zh-tw", "zh-hans", "zh-hant", "mandarin", "中文", "汉语", "简体", "繁体"},
+            "match_tokens": ("chinese", "zh", "mandarin", "中文", "汉语"),
+            "display": "中文 (Chinese)",
+            "tag": "中文",
+        },
+        "en": {
+            "aliases": {"en", "english", "us", "uk", "en-us", "en-gb", "英文", "英语"},
+            "match_tokens": ("english", "en", "英文", "英语"),
+            "display": "英文 (English)",
+            "tag": "英文",
+        },
+        "ja": {
+            "aliases": {"ja", "jp", "japanese", "ja-jp", "日文", "日语", "日本語"},
+            "match_tokens": ("japanese", "ja", "jp", "日文", "日语", "日本語"),
+            "display": "日文 (Japanese)",
+            "tag": "日文",
+        },
+        "ko": {
+            "aliases": {"ko", "kr", "korean", "ko-kr", "韩文", "韩语", "朝鲜语", "한국어"},
+            "match_tokens": ("korean", "ko", "kr", "韩文", "韩语", "한국어"),
+            "display": "韩文 (Korean)",
+            "tag": "韩文",
+        },
+        "fr": {
+            "aliases": {"fr", "french", "fr-fr", "français", "francais", "法文", "法语"},
+            "match_tokens": ("french", "fr", "français", "francais", "法文", "法语"),
+            "display": "法文 (French)",
+            "tag": "法文",
+        },
+        "de": {
+            "aliases": {"de", "german", "de-de", "deutsch", "德文", "德语"},
+            "match_tokens": ("german", "de", "deutsch", "德文", "德语"),
+            "display": "德文 (German)",
+            "tag": "德文",
+        },
+        "es": {
+            "aliases": {"es", "spanish", "es-es", "español", "espanol", "西文", "西班牙语", "西语"},
+            "match_tokens": ("spanish", "es", "español", "espanol", "西班牙语", "西语"),
+            "display": "西班牙文 (Spanish)",
+            "tag": "西班牙文",
+        },
+        "ru": {
+            "aliases": {"ru", "russian", "ru-ru", "русский", "俄文", "俄语"},
+            "match_tokens": ("russian", "ru", "русский", "俄文", "俄语"),
+            "display": "俄文 (Russian)",
+            "tag": "俄文",
+        },
+        "it": {
+            "aliases": {"it", "italian", "it-it", "italiano", "意大利文", "意大利语", "意语"},
+            "match_tokens": ("italian", "it", "italiano", "意大利语", "意语"),
+            "display": "意大利文 (Italian)",
+            "tag": "意大利文",
+        },
+        "pt": {
+            "aliases": {"pt", "portuguese", "pt-br", "pt-pt", "português", "portugues", "葡文", "葡萄牙语", "葡语"},
+            "match_tokens": ("portuguese", "pt", "português", "portugues", "葡萄牙语", "葡语"),
+            "display": "葡萄牙文 (Portuguese)",
+            "tag": "葡萄牙文",
+        },
+    }
 
     DEFAULT_HEADERS = {
         "User-Agent": (
@@ -87,12 +153,21 @@ class ShadowLibraryDriver(BaseDriver):
                 return False
         except Exception:
             pass
-        # 3. Exclude DOI identifier pattern (e.g. 10.1038/...)
-        if re.match(r"^10\.\d{4,9}/", clean):
+        # 3. Exclude DOI identifier pattern (e.g. 10.1038/... or doi:10.1038/...)
+        if re.match(r"^(?:doi:)?10\.\d{4,9}/", clean, re.IGNORECASE):
             return False
-        # 4. Exclude arXiv identifier pattern (e.g. arxiv:...)
-        if clean.lower().startswith("arxiv:"):
+        # 4. Exclude arXiv identifier pattern (e.g. arxiv:... or bare 2310.06825)
+        if clean.lower().startswith("arxiv:") or self.RAW_ARXIV_REGEX.match(clean):
             return False
+        # 5. Exclude Microsoft Store bare Product ID (e.g. 9nt1r1c2hh7j)
+        if self.RAW_MS_STORE_PID_REGEX.match(clean):
+            return False
+        # 6. Exclude Android APK prefixes or bare package names (e.g. com.termux)
+        if clean.lower().startswith(("apk:", "package:")):
+            return False
+        if " " not in clean and self.ANDROID_PKG_REGEX.match(clean):
+            if not any(clean.lower().endswith(ext) for ext in (".epub", ".pdf", ".mobi", ".azw3", ".txt")):
+                return False
 
         # Any non-URL plain text query with at least 2 chars is considered a book query
         return len(clean) >= 2
@@ -109,26 +184,38 @@ class ShadowLibraryDriver(BaseDriver):
             return param_match.group(1).lower()
         return None
 
-    @staticmethod
-    def _normalize_language_pref(preferred_lang: Optional[str], query: str) -> str:
+    @classmethod
+    def _normalize_language_pref(cls, preferred_lang: Optional[str], query: str) -> str:
         """
-        Normalize language preference based on conversation context:
-        - If user converses in Chinese -> 'zh'
-        - If user converses in English -> 'en'
-        - If not explicitly set, auto-detect from query content.
+        Normalize language preference based on conversation context or query script.
+        Supports zh, en, ja, ko, fr, de, es, ru, it, pt, and custom language names.
         """
         if preferred_lang:
             p = preferred_lang.strip().lower()
-            if p in ["zh", "chinese", "cn", "zh-cn", "zh-hans", "中文"]:
-                return "zh"
-            if p in ["en", "english", "us", "uk", "英文"]:
-                return "en"
+            for code, profile in cls.LANGUAGE_PROFILES.items():
+                if p == code or p in profile["aliases"]:
+                    return code
             return p
 
-        # Auto-detect from query characters
+        # Auto-detect from query script when preferred_lang is omitted:
+        # Check Japanese Kana first (since Japanese titles often mix Kanji + Kana)
+        if re.search(r"[\u3040-\u30ff]", query):
+            return "ja"
+        if re.search(r"[\uac00-\ud7af\u1100-\u11ff]", query):
+            return "ko"
+        if re.search(r"[\u0400-\u04ff]", query):
+            return "ru"
         if re.search(r"[\u4e00-\u9fff]", query):
             return "zh"
         return "en"
+
+    @classmethod
+    def _get_language_labels(cls, lang_code: str) -> Tuple[str, str]:
+        """Return (display_label, short_tag) for a normalized language code."""
+        profile = cls.LANGUAGE_PROFILES.get(lang_code)
+        if profile:
+            return profile["display"], profile["tag"]
+        return lang_code, lang_code
 
     def _search_libgen(self, query: str) -> List[Dict[str, Any]]:
         """Search across LibGen mirrors and return candidate records."""
@@ -189,8 +276,28 @@ class ShadowLibraryDriver(BaseDriver):
 
         return candidates
 
-    @staticmethod
+    @classmethod
+    def _lang_matches(cls, cand_lang: str, lang_code: str) -> bool:
+        """Check whether a candidate's language field matches the target language code without 2-letter substring collisions (e.g. 'es' in 'chinese')."""
+        if not cand_lang:
+            return False
+        cl = cand_lang.strip().lower()
+        profile = cls.LANGUAGE_PROFILES.get(lang_code)
+        if not profile:
+            return lang_code in cl
+        if cl == lang_code or re.search(rf"\b{re.escape(lang_code)}\b", cl):
+            return True
+        for token in profile["match_tokens"]:
+            if len(token) <= 2 and token.isascii():
+                if cl == token or re.search(rf"\b{re.escape(token)}\b", cl):
+                    return True
+            elif token in cl:
+                return True
+        return False
+
+    @classmethod
     def _rank_candidates(
+        cls,
         candidates: List[Dict[str, Any]],
         query: str,
         preferred_lang: str = "zh",
@@ -200,26 +307,20 @@ class ShadowLibraryDriver(BaseDriver):
         Rank search candidates according to user conversation language preference,
         file format quality, and title/author relevance.
         """
-        query_words = [w.lower() for w in re.findall(r"[\w\u4e00-\u9fff]+", query)]
+        norm_lang = cls._normalize_language_pref(preferred_lang, query)
+        query_words = [w.lower() for w in re.findall(r"[\w\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u4e00-\u9fff]+", query)]
 
         def get_score(c: Dict[str, Any]) -> float:
             score = 0.0
             cand_lang = c.get("language", "").strip().lower()
 
             # 1. User Conversation Language Priority (Dominant Weight)
-            if preferred_lang == "zh":
-                if any(k in cand_lang for k in ["chinese", "zh", "mandarin", "中文"]):
-                    score += 150.0
-                elif any(k in cand_lang for k in ["english", "en"]):
-                    score += 20.0
-            elif preferred_lang == "en":
-                if any(k in cand_lang for k in ["english", "en"]):
-                    score += 150.0
-                elif any(k in cand_lang for k in ["chinese", "zh"]):
-                    score += 20.0
-            else:
-                if preferred_lang in cand_lang:
-                    score += 150.0
+            if cls._lang_matches(cand_lang, norm_lang):
+                score += 150.0
+            elif norm_lang != "en" and cls._lang_matches(cand_lang, "en"):
+                score += 20.0
+            elif norm_lang != "zh" and cls._lang_matches(cand_lang, "zh"):
+                score += 20.0
 
             # 2. File Format / Reading Quality Priority
             ext = c.get("extension", "").strip().lower()
@@ -259,10 +360,10 @@ class ShadowLibraryDriver(BaseDriver):
     def _extract_by_search(self, query: str, preferred_lang: Optional[str] = None, **kwargs) -> AssetPackage:
         """Execute search, prioritize by conversation language, and resolve download."""
         lang = self._normalize_language_pref(preferred_lang, query)
+        lang_display, lang_tag = self._get_language_labels(lang)
         candidates = self._search_libgen(query)
 
         if not candidates:
-            lang_display = "中文 (Chinese)" if lang == "zh" else "英文 (English)"
             raise ExtractionError(f"未找到与关键词「{query}」相关的电子书资源 (偏好语言: {lang_display})")
 
         ranked_candidates = self._rank_candidates(candidates, query, preferred_lang=lang)
@@ -288,7 +389,6 @@ class ShadowLibraryDriver(BaseDriver):
                 pkg.metadata["search_candidate"] = cand
                 pkg.metadata["total_candidates_found"] = len(candidates)
 
-                lang_tag = "中文" if lang == "zh" else "英文"
                 pkg.raw_markdown = (
                     f"### 📚 电子书检索与下载产物\n"
                     f"- **检索关键词**：`{query}` (基于对话语言设定优先级：{lang_tag})\n"

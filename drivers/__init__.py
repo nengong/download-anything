@@ -41,7 +41,6 @@ def get_default_drivers() -> List[BaseDriver]:
         NetEaseMusicDriver(),
         SpotifyAppleMusicDriver(),
         OpenMusicDriver(),
-        ShadowLibraryDriver(),
         ArxivDriver(),
         DOIDriver(),
         NovelDriver(),
@@ -61,4 +60,5 @@ def get_default_drivers() -> List[BaseDriver]:
         WebArticleDriver(),
         MicrosoftStoreDriver(),
         AndroidAPKDriver(),
+        ShadowLibraryDriver(),
     ]

@@ -90,7 +90,8 @@ def process_download(
     prelim_clean = router.clean_input(target_text, explicit_password=password)
 
     # A pure download cache hit must not suppress explicitly requested post-processing.
-    cache_variant = "audio-only" if audio_only else "default"
+    base_variant = "audio-only" if audio_only else "default"
+    cache_variant = f"{base_variant}:lang={lang.strip().lower()}" if lang and lang.strip() else base_variant
     has_postprocessing = bool(
         transcribe
         or notion

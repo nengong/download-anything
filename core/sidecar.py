@@ -9,7 +9,7 @@ from typing import Optional, Dict
 from drivers.base import AssetPackage
 
 class SidecarWriter:
-    """Writes standardized sidecar files (.info.json and .md) alongside downloaded media."""
+    """Writes standardized sidecar files (.info.json, .md, and .lrc) alongside downloaded media."""
 
     SCHEMA_VERSION = "1.0"
 
@@ -23,12 +23,24 @@ class SidecarWriter:
         subtitle_filename: Optional[str] = None
     ) -> Dict[str, Path]:
         """
-        Generate and persist content.info.json and content.md into dest_dir.
+        Generate and persist content.info.json, content.md, and optional .lrc into dest_dir.
         Returns a mapping of sidecar type -> Path.
         """
         dest_dir.mkdir(parents=True, exist_ok=True)
         now_iso = datetime.now(timezone.utc).isoformat()
         sidecars = {}
+        # Sidecars must never overwrite any downloaded asset (including Markdown).
+        reserved = {dest_dir / asset.filename for asset in package.assets}
+        reserved.add(dest_dir / primary_filename)
+
+        def sidecar_path(filename):
+            candidate = dest_dir / filename
+            while candidate in reserved:
+                candidate = candidate.with_name(candidate.stem + ".metadata" + candidate.suffix)
+            reserved.add(candidate)
+            return candidate
+
+        md_path = sidecar_path("content.md")
 
         # 1. Structure content.info.json
         info_data = {
@@ -44,7 +56,7 @@ class SidecarWriter:
             "fetched_at": now_iso,
             "assets": {
                 "primary": primary_filename,
-                "sidecar_text": "content.md"
+                "sidecar_text": md_path.name
             },
             "metrics": package.metadata.get("metrics", {})
         }
@@ -54,13 +66,24 @@ class SidecarWriter:
         if subtitle_filename:
             info_data["assets"]["subtitle"] = subtitle_filename
 
+        # Optional synchronized lyrics (.lrc) companion file if present in metadata
+        lyrics_text = package.metadata.get("lyrics")
+        if lyrics_text and isinstance(lyrics_text, str) and lyrics_text.strip():
+            base_stem = Path(primary_filename).stem if primary_filename else "content"
+            lrc_filename = f"{base_stem}.lrc" if base_stem and base_stem != "content" else "lyrics.lrc"
+            lrc_path = sidecar_path(lrc_filename)
+            with open(lrc_path, "w", encoding="utf-8") as f:
+                f.write(lyrics_text.strip() + "\n")
+            sidecars["lyrics"] = lrc_path
+            info_data["assets"]["lyrics"] = lrc_path.name
+
         # Add any extra platform-specific metadata tags
         if "tags" in package.metadata:
             info_data["tags"] = package.metadata["tags"]
         if "extra" in package.metadata:
             info_data["extra"] = package.metadata["extra"]
 
-        info_path = dest_dir / "content.info.json"
+        info_path = sidecar_path("content.info.json")
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info_data, f, ensure_ascii=False, indent=2)
         sidecars["info_json"] = info_path
@@ -88,7 +111,8 @@ class SidecarWriter:
 
         # Body text / description
         md_lines.append("## 正文说明 / 描述")
-        body_content = package.raw_markdown or package.metadata.get("description", "")
+        body_content = (package.raw_markdown or package.metadata.get("sidecar_text")
+                        or package.metadata.get("description", ""))
         if body_content:
             md_lines.append(body_content)
         else:
@@ -102,7 +126,6 @@ class SidecarWriter:
             md_lines.append(" ".join(f"`#{t}`" for t in tags))
             md_lines.append("")
 
-        md_path = dest_dir / "content.md"
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(md_lines))
         sidecars["markdown"] = md_path
@@ -111,8 +134,8 @@ class SidecarWriter:
         if primary_filename and primary_filename != "content.mp4":
             base_stem = Path(primary_filename).stem
             if base_stem and base_stem != "content":
-                named_info = dest_dir / f"{base_stem}.info.json"
-                named_md = dest_dir / f"{base_stem}.md"
+                named_info = sidecar_path(f"{base_stem}.info.json")
+                named_md = sidecar_path(f"{base_stem}.md")
                 with open(named_info, "w", encoding="utf-8") as f:
                     json.dump(info_data, f, ensure_ascii=False, indent=2)
                 with open(named_md, "w", encoding="utf-8") as f:

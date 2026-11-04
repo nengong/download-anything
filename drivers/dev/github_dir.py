@@ -113,13 +113,13 @@ class GitHubDirDriver(BaseDriver):
         assets: List[TargetAsset] = []
         folder_name = path.split("/")[-1] or repo
 
-        for idx, item in enumerate(data):
+        for item in data:
             if item.get("type") == "file":
                 f_name = item.get("name")
                 dl_url = item.get("download_url")
                 if not dl_url:
                     continue
-                file_type = "primary" if idx == 0 else "extra"
+                file_type = "primary" if not assets else "extra"
                 assets.append(TargetAsset(
                     url=dl_url,
                     filename=f_name,

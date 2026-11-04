@@ -13,6 +13,9 @@ from core.exceptions import ExtractionError
 class DOIDriver(BaseDriver):
     """Driver for extracting Chinese and International academic papers via DOI."""
 
+    name = "doi"
+    category = "books"
+
     DOI_REGEX = re.compile(
         r"(?:https?://(?:dx\.)?doi\.org/|doi:)?(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)",
         re.IGNORECASE

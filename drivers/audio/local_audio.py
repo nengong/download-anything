@@ -36,6 +36,11 @@ class LocalAudioDriver(BaseDriver):
         if not file_path.exists():
             raise ExtractionError(f"Local audio file not found: {file_path}")
 
+        if kwargs.get("inspect_only"):
+            return AssetPackage(title=file_path.stem, platform=self.name, assets=[TargetAsset(
+                filename=file_path.name, url=file_path.as_uri(), expected_size=file_path.stat().st_size,
+            )], metadata={"requires_processing": True, "original_file": str(file_path)})
+
         stem = file_path.stem
         dest_dir = file_path.parent / f"unlocked_{stem}"
         dest_dir.mkdir(parents=True, exist_ok=True)

@@ -61,6 +61,11 @@ def test_shadow_library_can_handle():
     assert driver.can_handle("Thinking, Fast and Slow")
     assert not driver.can_handle("https://pan.quark.cn/s/123")
     assert not driver.can_handle("10.1038/s41586-020-2649-2")
+    assert not driver.can_handle("doi:10.1038/s41586-020-2649-2")
+    assert not driver.can_handle("2310.06825")
+    assert not driver.can_handle("9nt1r1c2hh7j")
+    assert not driver.can_handle("com.termux")
+    assert not driver.can_handle("apk:com.termux")
 
 def test_shadow_library_language_ranking():
     driver = ShadowLibraryDriver()
@@ -80,18 +85,60 @@ def test_shadow_library_language_ranking():
             "extension": "epub",
             "year": "2010",
             "md5": "22222222222222222222222222222222"
+        },
+        {
+            "title": "三体 (日本語版)",
+            "author": "劉慈欣",
+            "language": "Japanese",
+            "extension": "epub",
+            "year": "2019",
+            "md5": "33333333333333333333333333333333"
+        },
+        {
+            "title": "Die drei Sonnen",
+            "author": "Cixin Liu",
+            "language": "German",
+            "extension": "epub",
+            "year": "2017",
+            "md5": "44444444444444444444444444444444"
+        },
+        {
+            "title": "El problema de los tres cuerpos",
+            "author": "Cixin Liu",
+            "language": "Spanish",
+            "extension": "epub",
+            "year": "2016",
+            "md5": "55555555555555555555555555555555"
         }
     ]
 
-    # When user converses in Chinese -> Chinese prioritized
+    # Chinese prioritized
     ranked_zh = driver._rank_candidates(candidates, "三体", preferred_lang="zh")
     assert ranked_zh[0]["language"] == "Chinese"
-    assert ranked_zh[0]["md5"] == "22222222222222222222222222222222"
 
-    # When user converses in English -> English prioritized
+    # English prioritized
     ranked_en = driver._rank_candidates(candidates, "Three-Body Problem", preferred_lang="en")
     assert ranked_en[0]["language"] == "English"
-    assert ranked_en[0]["md5"] == "11111111111111111111111111111111"
+
+    # Japanese prioritized (via ISO code or Chinese name)
+    ranked_ja = driver._rank_candidates(candidates, "三体", preferred_lang="ja")
+    assert ranked_ja[0]["language"] == "Japanese"
+    assert driver._rank_candidates(candidates, "三体", preferred_lang="日语")[0]["language"] == "Japanese"
+
+    # German prioritized (via ISO 'de' matching LibGen 'German')
+    ranked_de = driver._rank_candidates(candidates, "Die drei Sonnen", preferred_lang="de")
+    assert ranked_de[0]["language"] == "German"
+
+    # Spanish prioritized (via ISO 'es' matching LibGen 'Spanish')
+    ranked_es = driver._rank_candidates(candidates, "El problema", preferred_lang="es")
+    assert ranked_es[0]["language"] == "Spanish"
+
+    # Script auto-detection when preferred_lang is None
+    assert driver._normalize_language_pref(None, "ノルウェイの森") == "ja"
+    assert driver._normalize_language_pref(None, "채식주의자") == "ko"
+    assert driver._normalize_language_pref(None, "Война и мир") == "ru"
+    assert driver._normalize_language_pref(None, "三体") == "zh"
+    assert driver._normalize_language_pref(None, "Clean Code") == "en"
 
 def test_shadow_library_extract_by_search(monkeypatch):
     driver = ShadowLibraryDriver()

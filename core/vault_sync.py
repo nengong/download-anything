@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import requests
+import yaml
 
 class VaultSync:
     """Seamless bridge into personal knowledge bases (Obsidian & Notion)."""
@@ -66,32 +67,39 @@ class VaultSync:
         inbox_dir.mkdir(parents=True, exist_ok=True)
 
         dest_note = None
+        has_named_md = any(
+            f.is_file() and f.suffix.lower() == ".md" and f.name != "content.md" and not f.name.endswith(".transcript.md")
+            for f in asset_dir.iterdir()
+        )
 
-        # Copy all asset files (images, covers, media, markdown)
+        # Copy asset files (skip redundant generic content.md / content.info.json if named versions exist)
+        md_files: List[Path] = []
         for item in asset_dir.iterdir():
             if item.is_file():
+                if has_named_md and item.name in ("content.md", "content.info.json"):
+                    continue
                 target = inbox_dir / item.name
                 shutil.copy2(item, target)
                 if item.suffix.lower() == ".md":
-                    dest_note = target
+                    md_files.append(target)
+                    if not item.name.endswith(".transcript.md"):
+                        dest_note = target
 
-        # If markdown note exists, inject YAML frontmatter for Obsidian Dataview / Graph
-        if dest_note and dest_note.exists():
-            content = dest_note.read_text(encoding="utf-8")
-            if not content.startswith("---"):
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                frontmatter = (
-                    f"---\n"
-                    f"title: \"{title}\"\n"
-                    f"platform: \"{platform}\"\n"
-                    f"source: \"{original_url}\"\n"
-                    f"imported_at: \"{now_str}\"\n"
-                    f"tags:\n"
-                    f"  - download-anything\n"
-                    f"  - micro-asset/{platform}\n"
-                    f"---\n\n"
-                )
-                dest_note.write_text(frontmatter + content, encoding="utf-8")
+        if not dest_note and md_files:
+            dest_note = md_files[0]
+
+        # Inject YAML frontmatter for Obsidian Dataview / Graph into synced Markdown notes
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        frontmatter = "---\n" + yaml.safe_dump({
+            "title": title, "platform": platform, "source": original_url,
+            "imported_at": now_str,
+            "tags": ["download-anything", f"micro-asset/{platform}"],
+        }, allow_unicode=True, sort_keys=False) + "---\n\n"
+        for md_target in md_files:
+            if md_target.exists():
+                content = md_target.read_text(encoding="utf-8")
+                if not content.startswith("---"):
+                    md_target.write_text(frontmatter + content, encoding="utf-8")
 
         return dest_note or inbox_dir
 

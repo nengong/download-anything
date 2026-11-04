@@ -21,10 +21,15 @@ dependencies = [
     "pypdf>=4.2.0",
     "pillow>=10.3.0",
     "cryptography>=42.0.0",
-    "rookiepy>=0.4.0",
+    "yt-dlp>=2024.0.0",
 ]
 
 [project.optional-dependencies]
+# Browser cookie harvesting; rookiepy publishes no Python 3.13 wheel and its
+# sdist metadata is broken, so it must never block a fresh install.
+browser = [
+    "rookiepy>=0.4.0; python_version < '3.13'",
+]
 dev = [
     "pytest>=8.2.0",
     "pytest-mock>=3.14.0",
@@ -36,4 +41,7 @@ dl = "cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "drivers"]
-extra-dependencies = []
+
+[tool.hatch.build.targets.wheel.force-include]
+"cli.py" = "cli.py"
+"skills/download-anything" = "share/download-anything/skill"

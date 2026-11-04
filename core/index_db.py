@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import urlsplit, urlunsplit
 
 class AssetIndexDB:
     """Lightweight SQLite-backed download index preventing duplicate downloads."""
@@ -40,7 +41,12 @@ class AssetIndexDB:
 
     @classmethod
     def _compute_key(cls, url: str, variant: str = "default") -> str:
-        clean = url.strip().lower()
+        clean = url.strip()
+        parsed = urlsplit(clean)
+        if parsed.scheme.lower() in {"http", "https"}:
+            # Paths, queries, fragments and local filenames may be case-sensitive.
+            clean = urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(),
+                                parsed.path, parsed.query, parsed.fragment))
         if variant != "default":
             clean = f"{variant.strip().lower()}\n{clean}"
         return hashlib.sha256(clean.encode("utf-8")).hexdigest()
@@ -59,10 +65,10 @@ class AssetIndexDB:
                     (key,)
                 )
                 row = cur.fetchone()
-                if row:
+                if row and cls._compute_key(row["original_url"], variant=variant) == key:
                     primary_path = Path(row["primary_file"])
                     # Check if file still exists on disk and is non-empty
-                    if primary_path.exists() and primary_path.stat().st_size > 0:
+                    if primary_path.is_file() and primary_path.stat().st_size == row["size_bytes"] and row["size_bytes"] > 0:
                         sidecars = {}
                         if row["sidecars_json"]:
                             try:
@@ -83,7 +89,7 @@ class AssetIndexDB:
                             "verification": {
                                 "valid": True,
                                 "detected_type": primary_path.suffix.lstrip(".").lower() or "binary",
-                                "details": {"cached_from": row["created_at"]}
+                                "details": {"level": "cached-existence", "cached_from": row["created_at"]}
                             }
                         }
         except Exception:

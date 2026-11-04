@@ -17,13 +17,14 @@ DEPENDENCY_SPEC = {
     "PIL": ("pillow>=10.3.0", "图片魔数深度自检与防 403 陷阱检测", True),
     "pypdf": ("pypdf>=4.2.0", "PDF 结构完整性与 EOF 签名验收", True),
     "cryptography": ("cryptography>=42.0.0", "跨平台 Chromium/Keychain 本地 Cookie 解密", True),
-    "rookiepy": ("rookiepy>=0.4.0", "原生静默读取 Chrome/Safari 默认浏览器 Cookie", True),
+    "rookiepy": ("rookiepy>=0.4.0", "原生静默读取 Chrome/Safari 默认浏览器 Cookie（可选增强，缺省时自动回退本地 Cookie 库）", False),
     "yt_dlp": ("yt-dlp>=2024.0.0", "YouTube/Twitter/Instagram 全球社交音视频提取器", True),
 }
 
 EXTERNAL_TOOLS = {
     "curl": ("系统原生流式网络下载工具，用于极端环境兜底", True),
     "ffmpeg": ("音视频流合并与无损格式探测（可选）", False),
+    "ffprobe": ("音视频结构校验（下载音视频时必须安装；随 FFmpeg 提供）", False),
 }
 
 class Doctor:
@@ -41,7 +42,7 @@ class Doctor:
             "dependencies": {},
             "external_tools": {},
             "mac_fda": None,
-            "all_required_ok": True,
+            "all_required_ok": sys.version_info >= (3, 10),
         }
 
         # 1. Check Python packages
@@ -112,7 +113,7 @@ class Doctor:
         missing = [
             info["pip_name"]
             for info in report["dependencies"].values()
-            if not info["installed"]
+            if not info["installed"] and info.get("required", True)
         ]
 
         if not missing:
@@ -122,7 +123,7 @@ class Doctor:
         py_executable = sys.executable
 
         if has_uv:
-            cmd = ["uv", "pip", "install"] + missing
+            cmd = ["uv", "pip", "install", "--python", py_executable] + missing
         else:
             cmd = [py_executable, "-m", "pip", "install"] + missing
 

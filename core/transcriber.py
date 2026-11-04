@@ -9,12 +9,13 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 import requests
+from core.exceptions import DAError
 
 class CloudTranscriber:
     """Ultra-lightweight audio transcription connector without local GPU/CPU model bloat."""
 
     @classmethod
-    def get_available_backend(cls) -> Optional[Tuple[str, str, str]]:
+    def get_available_backend(cls) -> Optional[Tuple[str, str, str, str]]:
         """
         Returns (backend_name, api_key, api_endpoint, model_name).
         """
@@ -45,12 +46,12 @@ class CloudTranscriber:
         """
         backend = cls.get_available_backend()
         if not backend:
-            return None
+            raise DAError("No transcription backend configured (GROQ_API_KEY / OPENAI_API_KEY / SILICONFLOW_KEY)")
 
         backend_name, api_key, endpoint, model_name = backend
 
         if not audio_path.exists() or audio_path.stat().st_size < 1000:
-            return None
+            raise DAError("Transcription source is missing or too small")
 
         # 1. Compress to 64k mono mp3 if larger than 24MB (API file size limit)
         upload_file = audio_path
@@ -70,6 +71,11 @@ class CloudTranscriber:
                 except Exception:
                     pass
 
+        if upload_file.stat().st_size > 24 * 1024 * 1024:
+            if temp_compressed:
+                temp_compressed.unlink(missing_ok=True)
+            raise DAError("Transcription upload still exceeds 24 MiB after compression")
+
         # 2. Call Speech-to-Text API
         transcript_text = ""
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -84,6 +90,8 @@ class CloudTranscriber:
                     "response_format": "verbose_json"
                 }
                 resp = requests.post(endpoint, headers=headers, files=files, data=data, timeout=120)
+                if resp.status_code != 200:
+                    raise DAError(f"Transcription API returned HTTP {resp.status_code}")
                 if resp.status_code == 200:
                     res_json = resp.json()
                     segments = res_json.get("segments", [])
@@ -99,14 +107,16 @@ class CloudTranscriber:
                         transcript_text = "\n".join(lines)
                     else:
                         transcript_text = res_json.get("text", "")
-        except Exception:
-            pass
+        except DAError:
+            raise
+        except Exception as exc:
+            raise DAError(f"Transcription request failed ({type(exc).__name__})") from exc
         finally:
             if temp_compressed and temp_compressed.exists():
                 temp_compressed.unlink(missing_ok=True)
 
         if not transcript_text:
-            return None
+            raise DAError("Transcription API returned no transcript text")
 
         # 3. Format and save [title].transcript.md
         transcript_file = output_dir / f"{title}.transcript.md"

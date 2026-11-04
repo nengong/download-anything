@@ -11,6 +11,9 @@ from core.exceptions import ExtractionError
 class ApplePodcastsDriver(BaseDriver):
     """Driver for extracting Apple Podcasts master MP3/M4A audio, shownotes, and high-res cover."""
 
+    name = "apple_podcasts"
+    category = "audio"
+
     APPLE_PODCASTS_REGEX = re.compile(
         r"https?://podcasts\.apple\.com/(?:[a-zA-Z-]+/)?podcast/(?:[^/]+/)?id(?P<podcast_id>\d+)(?:\?i=(?P<episode_id>\d+))?"
     )

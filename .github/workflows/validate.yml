@@ -1,0 +1,43 @@
+name: Validate release
+on: [push, pull_request]
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg zip
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ffmpeg -y
+          echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
+      - run: python -m pip install '.[dev]'
+      - run: python -m pytest -q
+      - run: python scripts/build_release.py
+      - name: Install bundled Skill outside the checkout (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          unzip dist/*.skill.zip -d /tmp/da-skill
+          cd /tmp
+          python da-skill/download-anything/scripts/install.py --venv /tmp/da-release-venv
+          /tmp/da-release-venv/bin/da --help
+          /tmp/da-release-venv/bin/da doctor --json
+      - name: Install bundled Skill outside the checkout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem dist/*.skill.zip | Select-Object -First 1).FullName
+          7z x $zip -oC:\da-skill | Out-Null
+          python C:\da-skill\download-anything\scripts\install.py --venv C:\da-release-venv
+          C:\da-release-venv\Scripts\da --help
+          C:\da-release-venv\Scripts\da doctor --json

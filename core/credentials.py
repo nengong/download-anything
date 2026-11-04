@@ -43,17 +43,23 @@ class CredentialsManager:
     """
     Resolves platform credentials from:
     1. Environment variables (DA_<PLATFORM>_COOKIE)
-    2. Local configuration file (config/credentials.yaml)
+    2. User home configuration file (~/.download-anything/credentials.yaml) & fallback (config/credentials.yaml)
     3. Live default browser cookies (Chrome, Arc, Edge, Brave, Safari via rookiepy)
     4. Local desktop app SQLite databases (~/Library/Application Support/...)
     5. macOS Keychain
     """
+
+    USER_CRED_DIR = Path.home() / ".download-anything"
 
     KEYCHAIN_SERVICE_MAP = {
         "quark": ["quark", "quark-cookie", "grab-cookie", "Quark Safe Storage", "QuarkCloudDrive Safe Storage"],
         "baidu": ["baidu", "baidu-cookie", "grab-cookie", "BaiduNetdisk"],
         "xiaohongshu": ["xiaohongshu", "xhs", "xhs-cookie", "grab-cookie"],
         "bilibili": ["bilibili", "bilibili-sessdata", "grab-cookie"],
+        "weibo": ["weibo", "weibo-cookie", "grab-cookie"],
+        "zhihu": ["zhihu", "zhihu-cookie", "grab-cookie"],
+        "douyin": ["douyin", "douyin-cookie", "grab-cookie"],
+        "music_163": ["music_163", "netease", "netease-cookie", "grab-cookie"],
     }
 
     PLATFORM_DOMAINS = {
@@ -61,9 +67,16 @@ class CredentialsManager:
         "baidu": ["baidu.com", "pan.baidu.com"],
         "xiaohongshu": ["xiaohongshu.com"],
         "bilibili": ["bilibili.com"],
+        "weibo": ["weibo.com", "weibo.cn"],
+        "zhihu": ["zhihu.com"],
+        "douyin": ["douyin.com"],
+        "music_163": ["music.163.com", "163.com"],
+        "feishu": ["feishu.cn", "larksuite.com"],
+        "notion": ["notion.so", "notion.site"],
     }
 
     def __init__(self, config_dir: Optional[Path] = None):
+        self._explicit_config_dir = config_dir is not None
         if config_dir is None:
             config_dir = Path(__file__).resolve().parent.parent / "config"
         self.config_dir = config_dir
@@ -74,15 +87,31 @@ class CredentialsManager:
         if self._cached_yaml is not None:
             return self._cached_yaml
 
-        cred_file = self.config_dir / "credentials.yaml"
-        if cred_file.exists():
-            try:
-                with open(cred_file, "r", encoding="utf-8") as f:
-                    self._cached_yaml = yaml.safe_load(f) or {}
-                    return self._cached_yaml
-            except Exception:
-                pass
-        self._cached_yaml = {}
+        merged: Dict[str, Any] = {}
+        candidate_files = [self.config_dir / "credentials.yaml"]
+        if not self._explicit_config_dir:
+            candidate_files.append(self.USER_CRED_DIR / "credentials.yaml")
+
+        for cred_file in candidate_files:
+            if cred_file.exists():
+                try:
+                    with open(cred_file, "r", encoding="utf-8") as f:
+                        loaded = yaml.safe_load(f) or {}
+                        if isinstance(loaded, dict):
+                            for k, v in loaded.items():
+                                if isinstance(v, dict) and isinstance(merged.get(k), dict):
+                                    for sub_k, sub_v in v.items():
+                                        if isinstance(sub_v, dict) and isinstance(merged[k].get(sub_k), dict):
+                                            for leaf_k, leaf_v in sub_v.items():
+                                                if leaf_v:
+                                                    merged[k][sub_k][leaf_k] = leaf_v
+                                        elif sub_v:
+                                            merged[k][sub_k] = sub_v
+                                elif v:
+                                    merged[k] = v
+                except Exception:
+                    pass
+        self._cached_yaml = merged
         return self._cached_yaml
 
     def _query_keychain(self, service: str) -> Optional[str]:
@@ -102,7 +131,6 @@ class CredentialsManager:
         """Attempt to extract live cookies from local default browsers via rookiepy."""
         try:
             import rookiepy
-            # Try popular browsers in priority order
             browser_loaders = [
                 rookiepy.chrome,
                 rookiepy.arc,
@@ -115,7 +143,6 @@ class CredentialsManager:
                 try:
                     cookies = loader(domains)
                     if cookies:
-                        # Assemble into cookie header string
                         cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies if c.get("value"))
                         if cookie_str:
                             return cookie_str
@@ -129,7 +156,6 @@ class CredentialsManager:
         """Attempt to harvest cookies from local desktop application profile databases."""
         if platform == "quark":
             cookies: Dict[str, str] = {}
-            # 1. Plaintext db
             p_plain = Path.home() / "Library/Application Support/quark-cloud-drive/Cookies"
             if p_plain.exists():
                 try:
@@ -142,7 +168,6 @@ class CredentialsManager:
                 except Exception:
                     pass
 
-            # 2. Encrypted dbs (QuarkCloudDrive / Quark Default)
             encrypted_dbs = [
                 Path.home() / "Library/Application Support/QuarkCloudDrive/Default/Cookies",
                 Path.home() / "Library/Application Support/Quark/Default/Cookies",
@@ -208,7 +233,6 @@ class CredentialsManager:
                     """)
                     items = dict(c.fetchall())
                     conn.close()
-                    # Ensure BDUSS is populated from BDUSS_BFESS if missing
                     if "BDUSS" not in items and "BDUSS_BFESS" in items:
                         items["BDUSS"] = items["BDUSS_BFESS"]
                     if items:
@@ -222,7 +246,7 @@ class CredentialsManager:
         """
         Lookup credentials in priority order:
         1. Environment Variable: DA_<PLATFORM>_<KEY>
-        2. config/credentials.yaml
+        2. ~/.download-anything/credentials.yaml (or config/credentials.yaml fallback)
         3. Live Browser Cookies (Chrome/Arc/Edge/Safari via rookiepy)
         4. Native Desktop App Cookies SQLite DB (Quark, Baidu)
         5. macOS Keychain
@@ -273,7 +297,7 @@ class CredentialsManager:
 
     def save_credential(self, platform: str, cookie: str, section: str = "pan"):
         """Atomically save a credential with 0600 permissions without losing concurrent updates."""
-        target_dir = self.config_dir
+        target_dir = self.config_dir if self._explicit_config_dir else self.USER_CRED_DIR
         cred_file = target_dir / "credentials.yaml"
         target_dir.mkdir(parents=True, exist_ok=True)
 

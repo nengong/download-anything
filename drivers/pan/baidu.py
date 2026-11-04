@@ -4,6 +4,7 @@ Baidu Netdisk (百度网盘) Headless Save-Download-Delete Driver
 import json
 import re
 import time
+import uuid
 from typing import Optional, List
 import requests
 
@@ -100,79 +101,91 @@ class BaiduDriver(BaseDriver):
         share_id = list_data.get("data", {}).get("shareid") or target_file.get("share_id")
         uk = list_data.get("data", {}).get("uk") or target_file.get("uk")
 
+        if kwargs.get("inspect_only"):
+            return AssetPackage(title=filename, platform=self.name, assets=[TargetAsset(
+                url="", filename=filename, expected_size=filesize,
+            )], metadata={"original_url": url, "requires_transfer": True,
+                         "direct_url_available": False})
+
         # 3. Requires BDUSS for Silent Transfer & PCS direct link download
         cookie = self._get_cookie()
         user_headers = dict(self.DEFAULT_HEADERS)
         user_headers["Cookie"] = cookie
 
-        # Ensure temp directory `/_da_temp/` exists
-        # Execute silent transfer
-        transfer_url = f"https://pan.baidu.com/share/transfer?shareid={share_id}&from={uk}"
-        transfer_payload = {
-            "fsidlist": f"[{fs_id}]",
-            "path": "/_da_temp"
-        }
+        temp_path = "/_da_temp_" + uuid.uuid4().hex
+        self._create_temp_folder(session, user_headers, temp_path)
+
+        owned_package = AssetPackage(title=filename, platform=self.name, context={"owned_temp_path": temp_path, "headers": user_headers})
         try:
-            tr = session.post(transfer_url, data=transfer_payload, headers=user_headers, timeout=15)
-            t_res = tr.json()
-        except Exception as e:
-            raise CloudDriveError(f"Failed to transfer file to Baidu temp folder: {e}")
-
-        # If errno == 12: directory doesn't exist, create it first
-        if t_res.get("errno") == 12:
-            self._create_temp_folder(session, user_headers)
-            tr = session.post(transfer_url, data=transfer_payload, headers=user_headers, timeout=15)
-            t_res = tr.json()
-
-        if t_res.get("errno") != 0 and t_res.get("errno") != -8: # -8 means file already exists in dest
-            raise CloudDriveError(f"Baidu silent transfer failed: {t_res.get('show_msg', t_res.get('errmsg'))}")
-
-        # 4. Query new file metadata & obtain direct PCS download link (dlink)
-        dlink = self._get_dlink(session, user_headers, filename)
-        if not dlink:
-            raise CloudDriveError(f"Failed to resolve PCS direct download link for `{filename}`.")
-
-        primary_asset = TargetAsset(
-            url=dlink,
-            filename=filename,
-            file_type="primary",
-            expected_size=filesize,
-            headers={
-                "User-Agent": "pan.baidu.com",
-                "Cookie": cookie
+            # Ensure temp directory `/_da_temp/` exists
+            # Execute silent transfer
+            transfer_url = f"https://pan.baidu.com/share/transfer?shareid={share_id}&from={uk}"
+            transfer_payload = {
+                "fsidlist": f"[{fs_id}]",
+                "path": temp_path
             }
-        )
+            try:
+                tr = session.post(transfer_url, data=transfer_payload, headers=user_headers, timeout=15)
+                t_res = tr.json()
+            except Exception as e:
+                raise CloudDriveError(f"Failed to transfer file to Baidu temp folder: {e}")
 
-        return AssetPackage(
-            title=filename,
-            platform=self.name,
-            assets=[primary_asset],
-            metadata={
-                "original_url": url,
-                "author_name": "Baidu Netdisk User",
-                "filesize_bytes": filesize,
-                "share_id": share_id,
-            },
-            context={
-                "headers": user_headers,
-                "filename": filename
-            },
-            raw_markdown=f"百度网盘无感穿透解析文件: `{filename}`"
-        )
+            if t_res.get("errno") != 0:
+                if t_res.get("errno") == -8:
+                    # Unexpected existing content must never be deleted by this task.
+                    owned_package.context.clear()
+                raise CloudDriveError(f"Baidu silent transfer failed: {t_res.get('show_msg', t_res.get('errmsg'))}")
 
-    def _create_temp_folder(self, session: requests.Session, headers: dict):
+            # 4. Query new file metadata & obtain direct PCS download link (dlink)
+            dlink = self._get_dlink(session, user_headers, filename, temp_path)
+            if not dlink:
+                raise CloudDriveError(f"Failed to resolve PCS direct download link for `{filename}`.")
+
+            primary_asset = TargetAsset(
+                url=dlink,
+                filename=filename,
+                file_type="primary",
+                expected_size=filesize,
+                headers={
+                    "User-Agent": "pan.baidu.com",
+                    "Cookie": cookie
+                }
+            )
+
+            return AssetPackage(
+                title=filename,
+                platform=self.name,
+                assets=[primary_asset],
+                metadata={
+                    "original_url": url,
+                    "author_name": "Baidu Netdisk User",
+                    "filesize_bytes": filesize,
+                    "share_id": share_id,
+                },
+                context={
+                    "headers": user_headers,
+                    "filename": filename,
+                    "owned_temp_path": temp_path,
+                },
+                raw_markdown=f"百度网盘无感穿透解析文件: `{filename}`"
+            )
+        except BaseException as exc:
+            self.cleanup_after_error(owned_package, exc)
+            raise
+
+    def _create_temp_folder(self, session: requests.Session, headers: dict, temp_path: str):
         create_url = "https://pan.baidu.com/api/create"
-        payload = {"path": "/_da_temp", "isdir": 1, "size": 0, "block_list": "[]"}
-        try:
-            session.post(create_url, data=payload, headers=headers, timeout=10)
-        except Exception:
-            pass
+        payload = {"path": temp_path, "isdir": 1, "size": 0, "block_list": "[]"}
+        response = session.post(create_url, data=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        if response.json().get("errno") != 0:
+            raise CloudDriveError("Baidu refused creation of an owned temporary directory")
 
-    def _get_dlink(self, session: requests.Session, headers: dict, filename: str) -> Optional[str]:
+    def _get_dlink(self, session: requests.Session, headers: dict, filename: str, temp_path: str) -> Optional[str]:
         """Query `/_da_temp` folder and obtain direct PCS dlink."""
-        list_url = "https://pan.baidu.com/api/list?dir=/_da_temp&num=50&order=time&desc=1"
+        list_url = "https://pan.baidu.com/api/list"
         try:
-            r = session.get(list_url, headers=headers, timeout=10)
+            r = session.get(list_url, params={"dir": temp_path, "num": 50, "order": "time", "desc": 1}, headers=headers, timeout=10)
             data = r.json()
             if data.get("errno") == 0:
                 for item in data.get("list", []):
@@ -184,14 +197,14 @@ class BaiduDriver(BaseDriver):
 
     def cleanup(self, package: AssetPackage) -> None:
         """Post-download atomic cleanup: delete the file from `/_da_temp/`."""
-        filename = package.context.get("filename")
+        temp_path = package.context.get("owned_temp_path")
         headers = package.context.get("headers")
-        if not filename or not headers:
+        if not temp_path or not re.fullmatch(r"/_da_temp_[a-f0-9]{32}", temp_path) or not headers:
             return
 
         del_url = "https://pan.baidu.com/rest/2.0/xpan/file?method=filemanager&opera=delete"
-        payload = {"filelist": f'["/_da_temp/{filename}"]'}
-        try:
-            requests.post(del_url, data=payload, headers=headers, timeout=10)
-        except Exception:
-            pass
+        payload = {"filelist": json.dumps([temp_path])}
+        response = requests.post(del_url, data=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        if response.json().get("errno") != 0:
+            raise CloudDriveError("Baidu temporary directory cleanup was not confirmed")

@@ -3,6 +3,7 @@ Resilient Streaming Download Engine with Range Support, Size Guards, and Curl Fa
 """
 import subprocess
 import time
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable, Dict
@@ -28,6 +29,15 @@ class Fetcher:
     def __init__(self, options: Optional[FetcherOptions] = None):
         self.options = options or FetcherOptions()
 
+    def _validate_size(self, path: Path, expected_size: Optional[int] = None) -> int:
+        size = path.stat().st_size
+        if size > self.options.max_bytes:
+            path.unlink(missing_ok=True)
+            raise FileTooLargeError("Download exceeded maximum size threshold")
+        if size == 0 or (expected_size is not None and size != expected_size):
+            raise DownloadError(f"Incomplete download: expected {expected_size} bytes, got {size}")
+        return size
+
     def download(
         self,
         url: str,
@@ -43,6 +53,8 @@ class Fetcher:
         Returns total bytes downloaded.
         """
         dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if expected_size is not None and expected_size <= 0:
+            expected_size = None
 
         # Handle data: URI directly
         if url.startswith("data:"):
@@ -59,6 +71,7 @@ class Fetcher:
                     f"maximum allowed limit ({self.options.max_bytes / (1024*1024):.1f}MB)"
                 )
             dest_path.write_bytes(content)
+            self._validate_size(dest_path, expected_size)
             if progress_callback:
                 progress_callback(len(content), len(content))
             return len(content)
@@ -70,6 +83,8 @@ class Fetcher:
             # urlparse / url2pathname handles file:///path
             parsed_path = urllib.request.url2pathname(url[7:])
             local_src = Path(parsed_path)
+            if not local_src.is_file():
+                raise DownloadError("Local source file is missing or is not a regular file")
             if local_src.exists() and local_src.stat().st_size > self.options.max_bytes:
                 raise FileTooLargeError(
                     f"Asset size ({local_src.stat().st_size / (1024*1024):.1f}MB) exceeds "
@@ -78,6 +93,7 @@ class Fetcher:
             if local_src != dest_path and local_src.exists():
                 shutil.copy2(local_src, dest_path)
             content_len = dest_path.stat().st_size if dest_path.exists() else 0
+            self._validate_size(dest_path, expected_size)
             if content_len > self.options.max_bytes:
                 raise FileTooLargeError(
                     f"Asset size ({content_len / (1024*1024):.1f}MB) exceeds "
@@ -90,6 +106,7 @@ class Fetcher:
         part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
         req_headers = {
+            "Accept-Encoding": "identity",
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -113,6 +130,10 @@ class Fetcher:
         for attempt in range(1, self.options.max_retries + 1):
             try:
                 attempt_headers = dict(req_headers)
+                if active_url != url:
+                    for key in list(attempt_headers):
+                        if key.lower() in {"cookie", "authorization", "proxy-authorization"}:
+                            del attempt_headers[key]
                 if existing_bytes > 0:
                     attempt_headers["Range"] = f"bytes={existing_bytes}-"
 
@@ -123,9 +144,15 @@ class Fetcher:
                     timeout=(15, self.options.inactivity_timeout),
                     allow_redirects=True
                 ) as resp:
-                    if resp.status_code == 416:  # Range Not Satisfiable -> file already complete
-                        part_path.replace(dest_path)
-                        return dest_path.stat().st_size
+                    if resp.status_code == 416:
+                        match = re.fullmatch(r"bytes \*/(\d+)", resp.headers.get("Content-Range", ""))
+                        if match and part_path.exists() and part_path.stat().st_size == int(match[1]):
+                            size = self._validate_size(part_path, expected_size or int(match[1]))
+                            part_path.replace(dest_path)
+                            return size
+                        part_path.unlink(missing_ok=True)
+                        existing_bytes = 0
+                        raise DownloadError("Range response does not prove the partial file is complete")
 
                     resp.raise_for_status()
 
@@ -139,6 +166,16 @@ class Fetcher:
                         else:
                             remote_len = cl
                             existing_bytes = 0
+
+                    if resp.status_code == 206:
+                        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", resp.headers.get("Content-Range", ""))
+                        if not match or int(match[1]) != existing_bytes:
+                            part_path.unlink(missing_ok=True)
+                            existing_bytes = 0
+                            raise DownloadError("Invalid Content-Range for resumed download")
+                        start, end, remote_len = map(int, match.groups())
+                        if end < start or end >= remote_len or (content_length and int(content_length) != end - start + 1):
+                            raise DownloadError("Inconsistent Content-Range length")
 
                     total_expected = remote_len or expected_size
 
@@ -176,8 +213,11 @@ class Fetcher:
 
                     # Completed stream successfully
                     if part_path.exists() and part_path.stat().st_size > 0:
+                        size = self._validate_size(part_path, total_expected)
+                        if expected_size is not None:
+                            self._validate_size(part_path, expected_size)
                         part_path.replace(dest_path)
-                        return dest_path.stat().st_size
+                        return size
 
             except FileTooLargeError:
                 raise
@@ -201,7 +241,7 @@ class Fetcher:
                 time.sleep(1.0 * attempt)
 
         # 2. Seamless failover to native curl if requests struggled
-        curl_success = self._download_via_curl(url, part_path, dest_path, req_headers, progress_callback)
+        curl_success = self._download_via_curl(url, part_path, dest_path, req_headers, progress_callback, expected_size)
         if curl_success:
             return dest_path.stat().st_size
 
@@ -216,11 +256,14 @@ class Fetcher:
         part_path: Path,
         dest_path: Path,
         headers: Dict[str, str],
-        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None
+        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None,
+        expected_size: Optional[int] = None,
     ) -> bool:
         """Secondary transfer engine using curl with auto-resume and HTTP/1.1+HTTP/2."""
         try:
-            cmd = ["curl", "-C", "-", "-sSL", "--connect-timeout", "15"]
+            cmd = ["curl", "-C", "-", "-fsSL", "--connect-timeout", "15",
+                   "--speed-time", str(self.options.inactivity_timeout), "--speed-limit", "1",
+                   "--max-filesize", str(self.options.max_bytes)]
             for k, v in headers.items():
                 if k.lower() == "referer":
                     cmd.extend(["-e", v])
@@ -230,19 +273,24 @@ class Fetcher:
                     cmd.extend(["-H", f"{k}: {v}"])
             cmd.extend([url, "-o", str(part_path)])
 
-            proc = subprocess.Popen(cmd)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             while proc.poll() is None:
                 if part_path.exists():
                     cur_size = part_path.stat().st_size
                     if cur_size > self.options.max_bytes:
                         proc.kill()
+                        proc.wait()
                         part_path.unlink(missing_ok=True)
                         raise FileTooLargeError(f"Download exceeded {self.options.max_bytes / (1024*1024):.1f}MB")
                     if progress_callback:
                         progress_callback(cur_size, None)
                 time.sleep(0.5)
 
-            if proc.returncode == 0 and part_path.exists() and part_path.stat().st_size > 0:
+            if proc.returncode == 63:
+                part_path.unlink(missing_ok=True)
+                raise FileTooLargeError("curl rejected a download exceeding the size limit")
+            if proc.returncode == 0 and part_path.exists():
+                self._validate_size(part_path, expected_size)
                 part_path.replace(dest_path)
                 return True
         except FileTooLargeError:

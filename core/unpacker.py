@@ -1,167 +1,124 @@
-"""
-Safe Archive Extraction Engine with Automatic Password Handling
-Supports zip, tar, and transparent failover for encrypted archives.
-Defends against zip slip (path traversal) vulnerabilities.
-"""
+"""Bounded ZIP/TAR extraction. Archive links and external unpackers are not used."""
 import os
-import shutil
-import subprocess
+import re
+import stat
 import tarfile
 import zipfile
-from pathlib import Path
-from typing import Optional, List, Dict, Any
+from pathlib import Path, PurePosixPath
+from typing import Optional, List
+
+from core.exceptions import ExtractionError, FileTooLargeError
+
 
 class Unpacker:
-    """Safely extracts downloaded archives with optional passwords."""
-
     SUPPORTED_EXTENSIONS = {".zip", ".tar", ".gz", ".tgz", ".bz2", ".7z", ".rar"}
+    MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
+    MAX_MEMBERS = 10000
 
     @classmethod
     def is_archive(cls, file_path: Path) -> bool:
-        """Check if file is an archive based on extension and magic headers."""
-        if not file_path.exists() or file_path.is_dir():
+        if not file_path.is_file():
             return False
-        
-        ext = "".join(file_path.suffixes).lower()
-        if any(ext.endswith(s) for s in cls.SUPPORTED_EXTENSIONS):
+        if file_path.suffix.lower() in cls.SUPPORTED_EXTENSIONS:
             return True
+        with file_path.open("rb") as source:
+            return source.read(8).startswith((b"PK\x03\x04", b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07"))
 
-        # Check magic bytes for ZIP and TAR
+    @staticmethod
+    def _target(base: Path, name: str) -> Optional[Path]:
+        path = PurePosixPath(name.replace("\\", "/"))
+        if path.is_absolute() or ".." in path.parts or re.match(r"^[A-Za-z]:", name):
+            return None
+        target = base.joinpath(*path.parts)
+        for candidate in [target, *target.parents]:
+            if candidate == base.parent:
+                break
+            if candidate.is_symlink():
+                raise ExtractionError("Archive destination contains a symbolic link")
         try:
-            with open(file_path, "rb") as f:
-                head = f.read(8)
-                if head.startswith(b"PK\x03\x04") or head.startswith(b"7z\xbc\xaf\x27\x1c") or head.startswith(b"Rar!\x1a\x07"):
-                    return True
-        except Exception:
-            pass
-
-        return False
+            target.resolve().relative_to(base)
+        except ValueError:
+            raise ExtractionError("Archive entry escapes the extraction directory")
+        return target
 
     @classmethod
-    def unpack(
-        cls,
-        archive_path: Path,
-        dest_dir: Optional[Path] = None,
-        password: Optional[str] = None,
-        remove_archive_after: bool = False
-    ) -> List[Path]:
-        """
-        Extract archive into dest_dir (defaults to a subfolder named after archive stem).
-        Returns list of extracted file paths.
-        """
+    def _write(cls, source, target: Path, budget: list) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            with os.fdopen(os.open(target, flags, 0o600), "wb") as output:
+                while chunk := source.read(65536):
+                    budget[0] += len(chunk)
+                    if budget[0] > cls.MAX_EXTRACTED_BYTES:
+                        raise FileTooLargeError("Archive exceeds unpacked byte limit")
+                    output.write(chunk)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+
+    @classmethod
+    def _check_budget(cls, sizes: list) -> None:
+        if len(sizes) > cls.MAX_MEMBERS or sum(sizes) > cls.MAX_EXTRACTED_BYTES:
+            raise FileTooLargeError("Archive exceeds unpacked size or member limit")
+
+    @classmethod
+    def unpack(cls, archive_path: Path, dest_dir: Optional[Path] = None,
+               password: Optional[str] = None, remove_archive_after: bool = False) -> List[Path]:
         if not archive_path.exists():
             return []
-
-        if dest_dir is None:
-            dest_dir = archive_path.parent / f"extracted_{archive_path.stem}"
-
+        dest_dir = dest_dir or archive_path.parent / f"extracted_{archive_path.stem}"
+        if dest_dir.is_symlink():
+            raise ExtractionError("Extraction root must not be a symbolic link")
         dest_dir.mkdir(parents=True, exist_ok=True)
-        extracted_files: List[Path] = []
-
-        # 1. Try ZIP
+        base = dest_dir.resolve()
+        files = []
+        budget = [0]
         if zipfile.is_zipfile(archive_path):
-            extracted_files = cls._unpack_zip(archive_path, dest_dir, password)
-
-        # 2. Try TAR
+            with zipfile.ZipFile(archive_path) as archive:
+                members = archive.infolist()
+                cls._check_budget([member.file_size for member in members])
+                for member in members:
+                    if stat.S_ISLNK(member.external_attr >> 16):
+                        raise ExtractionError("Archive symbolic links are not supported")
+                    target = cls._target(base, member.filename)
+                    if target is None:
+                        continue
+                    if member.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    candidates = [None] if password is None else list(dict.fromkeys(
+                        password.encode(encoding, errors="ignore") for encoding in ("utf-8", "gbk", "cp437")))
+                    for index, pwd in enumerate(candidates):
+                        try:
+                            with archive.open(member, pwd=pwd) as source:
+                                cls._write(source, target, budget)
+                            break
+                        except RuntimeError as exc:
+                            if index == len(candidates) - 1:
+                                raise ExtractionError("ZIP password is missing or incorrect") from exc
+                    files.append(target)
         elif tarfile.is_tarfile(archive_path):
-            extracted_files = cls._unpack_tar(archive_path, dest_dir)
-
-        # 3. Fallback to system 7z / unar if available
-        if not extracted_files:
-            extracted_files = cls._unpack_external(archive_path, dest_dir, password)
-
-        if extracted_files and remove_archive_after:
-            try:
-                archive_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-        return extracted_files
-
-    @classmethod
-    def _unpack_zip(cls, archive_path: Path, dest_dir: Path, password: Optional[str]) -> List[Path]:
-        files: List[Path] = []
-        pw_bytes_candidates = []
-        if password:
-            pw_bytes_candidates = [
-                password.encode("utf-8"),
-                password.encode("gbk", errors="ignore"),
-                password.encode("cp437", errors="ignore")
-            ]
-        else:
-            pw_bytes_candidates = [None]
-
-        with zipfile.ZipFile(archive_path) as zf:
-            success = False
-            for pwd in pw_bytes_candidates:
-                try:
-                    for member in zf.infolist():
-                        # Prevent Zip Slip directory traversal vulnerability
-                        member_path = Path(member.filename)
-                        if member_path.is_absolute() or ".." in member_path.parts:
-                            continue
-                        
-                        target_file = dest_dir / member_path
-                        if member.is_dir():
-                            target_file.mkdir(parents=True, exist_ok=True)
-                        else:
-                            target_file.parent.mkdir(parents=True, exist_ok=True)
-                            with zf.open(member, "r", pwd=pwd) as source, open(target_file, "wb") as target:
-                                shutil.copyfileobj(source, target)
-                            files.append(target_file)
-                    success = True
-                    break
-                except (RuntimeError, zipfile.BadZipFile):
-                    # Password mismatch, try next candidate
-                    files.clear()
-                    continue
-
-        return files
-
-    @classmethod
-    def _unpack_tar(cls, archive_path: Path, dest_dir: Path) -> List[Path]:
-        files: List[Path] = []
-        with tarfile.open(archive_path) as tf:
-            for member in tf.getmembers():
-                member_path = Path(member.name)
-                if member_path.is_absolute() or ".." in member_path.parts:
-                    continue
-                target = dest_dir / member_path
-                if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    f = tf.extractfile(member)
-                    if f:
-                        with open(target, "wb") as out:
-                            shutil.copyfileobj(f, out)
+            with tarfile.open(archive_path) as archive:
+                members = []
+                for member in archive:
+                    members.append(member)
+                    if len(members) > cls.MAX_MEMBERS:
+                        raise FileTooLargeError("Archive exceeds member limit")
+                cls._check_budget([member.size for member in members])
+                for member in members:
+                    if not (member.isdir() or member.isreg()):
+                        raise ExtractionError("TAR links and special files are not supported")
+                    target = cls._target(base, member.name)
+                    if target is None:
+                        continue
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        with archive.extractfile(member) as source:
+                            cls._write(source, target, budget)
                         files.append(target)
+        else:
+            raise ExtractionError("Safe automatic extraction supports ZIP and TAR only; use --no-unzip to keep this archive")
+        if files and remove_archive_after:
+            archive_path.unlink()
         return files
-
-    @classmethod
-    def _unpack_external(cls, archive_path: Path, dest_dir: Path, password: Optional[str]) -> List[Path]:
-        """External 7z / unar / unzip tool fallback for complex .7z, .rar, or AES-256 archives."""
-        seven_zip = shutil.which("7z") or shutil.which("7za")
-        if seven_zip:
-            cmd = [seven_zip, "x", f"-o{dest_dir}", "-y", str(archive_path)]
-            if password:
-                cmd.append(f"-p{password}")
-            try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=True)
-                return [p for p in dest_dir.rglob("*") if p.is_file()]
-            except Exception:
-                pass
-
-        unzip_tool = shutil.which("unzip")
-        if unzip_tool and zipfile.is_zipfile(archive_path):
-            cmd = [unzip_tool, "-o", str(archive_path), "-d", str(dest_dir)]
-            if password:
-                cmd.insert(1, f"-P{password}")
-                cmd.insert(1, "-q")
-            try:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=True)
-                return [p for p in dest_dir.rglob("*") if p.is_file()]
-            except Exception:
-                pass
-
-        return []

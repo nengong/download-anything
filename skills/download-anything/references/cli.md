@@ -10,7 +10,7 @@
 | `-i, --input-file FILE` | 一行一个目标，忽略空行及 `#` 注释；串行处理 |
 | `-o, --output-dir PATH` | 保存根目录，每次按日期和标题创建子目录 |
 | `-p, --password TEXT` | 分享提取码或 ZIP 密码 |
-| `--lang LANG` | 语言偏好（如 `zh`、`en`），依据使用者对话语言设定，高权重优先匹配对应语言版本 |
+| `--lang LANG` | 语言偏好（如 `zh`、`en`、`ja`、`ko`、`fr`、`de`、`es`、`ru`、`it`、`pt`），依据使用者对话语言设定，高权重优先匹配对应语言版本 |
 | `-a, --audio, --audio-only` | 提取纯音轨，必要时调用 ffmpeg |
 | `-f, --force` | 跳过本地缓存，重新解析和下载 |
 | `--vault PATH, --obsidian PATH` | 同步至指定 Obsidian 目录，均需路径 |

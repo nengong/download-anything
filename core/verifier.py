@@ -2,6 +2,10 @@
 Deep Content Integrity and Magic Byte Verifier
 """
 import zipfile
+import json
+import math
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -15,6 +19,23 @@ class VerificationResult:
     size_bytes: int
     error_message: Optional[str] = None
     details: Dict[str, Any] = field(default_factory=dict)
+
+def detect_audio_container(head: bytes) -> Optional[str]:
+    """Return the audio container implied by its header, or None if unknown."""
+    if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+        return "mp3"
+    if len(head) >= 8 and head[4:8] == b"ftyp":
+        return "m4a"
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        return "webm"
+    if head.startswith(b"OggS"):
+        return "ogg"
+    if head.startswith(b"fLaC"):
+        return "flac"
+    if head.startswith(b"RIFF") and b"WAVE" in head[:16]:
+        return "wav"
+    return None
+
 
 class Verifier:
     """Rigorous verification state machine for downloaded micro-assets."""
@@ -87,9 +108,9 @@ class Verifier:
             return cls._verify_zip_container(file_path, actual_size, is_epub=(ext == "epub"))
         elif ext in ("jpg", "jpeg", "png", "webp", "gif"):
             return cls._verify_image(file_path, head, actual_size, ext)
-        elif ext in ("mp4", "m4v", "mov"):
+        elif ext in ("mp4", "m4v", "mov", "mkv", "webm", "avi", "flv", "ts"):
             return cls._verify_mp4(file_path, head, actual_size)
-        elif ext in ("mp3", "audio"):
+        elif ext in ("mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "audio"):
             return cls._verify_mp3(file_path, head, actual_size)
 
         # Default generic verification for unknown formats: non-empty, passed size check
@@ -97,7 +118,7 @@ class Verifier:
             valid=True,
             detected_type=f"binary/{ext or 'generic'}",
             size_bytes=actual_size,
-            details={"head_sample": head[:16].hex()}
+            details={"level": "basic", "head_sample": head[:16].hex()}
         )
 
     @classmethod
@@ -154,6 +175,13 @@ class Verifier:
             )
         try:
             with zipfile.ZipFile(path, "r") as zf:
+                members = zf.infolist()
+                if len(members) > 10000 or sum(m.file_size for m in members) > 500 * 1024 * 1024:
+                    return VerificationResult(False, "archive_limit_exceeded", size,
+                                              "Archive exceeds the unpacked size or member limit")
+                if any(m.flag_bits & 1 for m in members):
+                    return VerificationResult(True, "zip", size,
+                                              details={"level": "encrypted-container", "crc_checked": False})
                 bad_file = zf.testzip()
                 if bad_file:
                     return VerificationResult(
@@ -215,34 +243,45 @@ class Verifier:
 
     @classmethod
     def _verify_mp4(cls, path: Path, head: bytes, size: int) -> VerificationResult:
-        # ISO Base Media File Format: starts with [4 bytes length] 'ftyp'
-        if len(head) >= 8 and head[4:8] == b"ftyp":
-            brand = head[8:12].decode("latin-1", errors="ignore")
-            return VerificationResult(
-                valid=True,
-                detected_type="video/mp4",
-                size_bytes=size,
-                details={"brand": brand}
-            )
-        return VerificationResult(
-            valid=False,
-            detected_type="corrupted_mp4",
-            size_bytes=size,
-            error_message="Missing MP4 ftyp atom in file header"
-        )
+        return cls._verify_media(path, size, "video")
 
     @classmethod
     def _verify_mp3(cls, path: Path, head: bytes, size: int) -> VerificationResult:
-        if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
-            return VerificationResult(
-                valid=True,
-                detected_type="audio/mp3",
-                size_bytes=size,
-                details={"has_id3": head.startswith(b"ID3")}
+        return cls._verify_media(path, size, "audio")
+
+    @classmethod
+    def _verify_media(cls, path: Path, size: int, media_type: str) -> VerificationResult:
+        probe = shutil.which("ffprobe")
+        if not probe:
+            return VerificationResult(False, "unverified_media", size,
+                                      "ffprobe is required to validate audio/video; install FFmpeg")
+        try:
+            result = subprocess.run(
+                [probe, "-v", "error", "-count_packets", "-show_streams", "-show_format",
+                 "-of", "json", str(path)],
+                capture_output=True, text=True, timeout=60,
             )
-        return VerificationResult(
-            valid=False,
-            detected_type="corrupted_mp3",
-            size_bytes=size,
-            error_message="Missing MP3 ID3 header or sync word"
-        )
+            if result.returncode or result.stderr.strip():
+                raise ValueError("ffprobe reported invalid or truncated media")
+            info = json.loads(result.stdout)
+            if media_type == "video" and path.suffix.lower() in {".webm", ".mkv"} and not any(
+                s.get("codec_type") == "video" for s in info.get("streams", [])
+            ):
+                media_type = "audio"
+            streams = [s for s in info.get("streams", []) if s.get("codec_type") == media_type
+                       and not s.get("disposition", {}).get("attached_pic")]
+            if not streams or not any(int(s.get("nb_read_packets", 0)) > 0 for s in streams):
+                raise ValueError(f"No readable {media_type} packets")
+            fmt = info.get("format", {})
+            duration = float(fmt.get("duration") or streams[0].get("duration") or 0)
+            if not math.isfinite(duration) or duration <= 0:
+                raise ValueError("Missing or invalid media duration")
+            container = fmt.get("format_name", "unknown")
+            name = ("m4a" if media_type == "audio" else "mp4") if "mov,mp4" in container else (
+                "webm" if "webm" in container else container.split(",")[0])
+            return VerificationResult(True, f"{media_type}/{name}", size, details={
+                "level": "media-structure", "duration_seconds": duration,
+                "container": container, "stream_count": len(streams),
+            })
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+            return VerificationResult(False, f"corrupted_{media_type}", size, str(exc))
