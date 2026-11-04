@@ -463,6 +463,21 @@ def process_download(
                 )
 
 
+def _ensure_utf8_output():
+    """Force UTF-8 stdout/stderr so Chinese JSON survives Windows pipes.
+
+    Piped output on Windows defaults to the legacy code page (cp1252), which
+    makes `da doctor --json > report.json` and friends crash with
+    UnicodeEncodeError. Real consoles are already UTF-8 and stay untouched.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and (stream.encoding or "").lower().replace("-", "") not in ("utf8", "utf8mb4"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.argument("targets", nargs=-1)
 @click.option("-i", "--input-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Batch download URLs from a file (one per line)")
@@ -505,6 +520,7 @@ def main(
     Input can be a URL, mobile share text, book MD5, or batch file (-i links.txt).
     """
     targets_list = list(targets)
+    _ensure_utf8_output()
 
     # 1. Handle special subcommands
     if len(targets_list) >= 1 and targets_list[0] in ("login", "auth"):
