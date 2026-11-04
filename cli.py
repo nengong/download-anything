@@ -85,9 +85,21 @@ def process_download(
     transcribe: bool = False
 ) -> Dict[str, Any]:
     """Core download pipeline for a single target."""
-    # 0. Local Deduplication Check (skip re-downloading if already cached and intact)
-    if not check and not force:
-        cached = AssetIndexDB.query(target_text)
+    router = Router(get_default_drivers())
+    prelim_clean = router.clean_input(target_text, explicit_password=password)
+
+    # A pure download cache hit must not suppress explicitly requested post-processing.
+    cache_variant = "audio-only" if audio_only else "default"
+    has_postprocessing = bool(
+        transcribe
+        or notion
+        or vault
+        or output_dir
+        or os.getenv("OBSIDIAN_VAULT_PATH")
+        or os.getenv("DA_VAULT_PATH")
+    )
+    if not check and not force and not has_postprocessing:
+        cached = AssetIndexDB.query(prelim_clean.url, variant=cache_variant) or AssetIndexDB.query(target_text, variant=cache_variant)
         if cached:
             if not agent_mode:
                 console.print(Panel(
@@ -100,7 +112,6 @@ def process_download(
                 ))
             return cached
 
-    router = Router(get_default_drivers())
     driver, clean_input = router.route(target_text, explicit_password=password)
 
     if not agent_mode and verbose:
@@ -241,6 +252,11 @@ def process_download(
             primary_asset.local_path = dest_file
             downloaded_size = dest_file.stat().st_size
             primary_asset.downloaded_bytes = downloaded_size
+        else:
+            raise DAError(
+                f"Audio extraction failed for {primary_asset.filename}; "
+                "the original video was preserved. Check ffmpeg availability and the source audio track."
+            )
 
     # Normalize non-MP3 audio streams saved with an .mp3 suffix.
     expected_verify_size = primary_asset.expected_size if not audio_only else None
@@ -381,7 +397,8 @@ def process_download(
         output_dir=base_dir,
         primary_file=dest_file,
         size_bytes=downloaded_size,
-        sidecars=sidecar_dict
+        sidecars=sidecar_dict,
+        variant=cache_variant,
     )
 
     return {
@@ -401,7 +418,7 @@ def process_download(
     }
 
 
-@click.command()
+@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.argument("targets", nargs=-1)
 @click.option("-i", "--input-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Batch download URLs from a file (one per line)")
 @click.option("-o", "--output-dir", help="Output directory path (default: ~/Downloads/DA/<folder>)")
@@ -415,6 +432,7 @@ def process_download(
 @click.option("--max-mb", default=500, type=int, help="Maximum allowed file size in MB (default: 500)")
 @click.option("--check", is_flag=True, help="Dry run: inspect and extract metadata without downloading")
 @click.option("--no-sidecar", is_flag=True, help="Disable generating sidecar metadata (.info.json and .md)")
+@click.option("--fix", is_flag=True, help="Auto-repair and install missing dependencies in doctor mode")
 @click.option("--json", "agent_mode", is_flag=True, help="Agent mode: output JSON result to stdout")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logs")
 def main(
@@ -431,6 +449,7 @@ def main(
     max_mb: int,
     check: bool,
     no_sidecar: bool,
+    fix: bool,
     agent_mode: bool,
     verbose: bool
 ):
@@ -443,12 +462,13 @@ def main(
     # 1. Handle special subcommands
     if len(targets_list) >= 1 and targets_list[0] in ("login", "auth"):
         platform_name = (targets_list[1] if len(targets_list) > 1 else "quark").lower()
-        _handle_login(platform_name)
-        sys.exit(0)
+        login_ok = _handle_login(platform_name, agent_mode=agent_mode)
+        sys.exit(0 if login_ok else 1)
 
     if len(targets_list) >= 1 and targets_list[0] in ("doctor", "check-env", "diagnose"):
         sub = targets_list[1] if len(targets_list) > 1 else None
-        _handle_doctor(sub, agent_mode)
+        is_fix = fix or (sub in ("--fix", "-f")) or ("--fix" in sys.argv)
+        _handle_doctor(sub, agent_mode, fix=is_fix)
         sys.exit(0)
 
     # 2. Collect input targets from input_file or clipboard
@@ -619,41 +639,49 @@ def main(
     sys.exit(0 if success_count > 0 else 1)
 
 
-def _handle_login(platform: str):
+def _handle_login(platform: str, agent_mode: bool = False) -> bool:
     """Automated login helper: harvests from browser or triggers headless capture."""
     from core.credentials import credentials_manager
 
     platform = platform.lower()
-    console.print(Panel(
-        f"[bold cyan]正在自动探测 {platform} 登录凭据...[/bold cyan]\n"
-        "[dim]优先尝试从本地 Chrome/Safari/Edge 浏览器提取...[/dim]",
-        border_style="cyan"
-    ))
+    if not agent_mode:
+        console.print(Panel(
+            f"[bold cyan]正在自动探测 {platform} 登录凭据...[/bold cyan]\n"
+            "[dim]优先尝试从本地 Chrome/Safari/Edge 浏览器提取...[/dim]",
+            border_style="cyan"
+        ))
 
     # 1. Check if rookiepy can get it directly from browsers
     domains = credentials_manager.PLATFORM_DOMAINS.get(platform, [f"{platform}.com"])
     cookie = credentials_manager._harvest_from_browsers(domains)
     if cookie:
         credentials_manager.save_credential(platform, cookie)
-        console.print(Panel(
-            f"[bold green]✔ 成功直接从默认浏览器中捕获到 {platform} 的登录 Cookie！已自动保存。[/bold green]\n"
-            "[dim]现在直接运行 da \"<网盘链接>\" 即可免登极速下载。[/dim]",
-            border_style="green"
-        ))
-        return
+        if agent_mode:
+            print(json.dumps({"status": "success", "platform": platform, "source": "browser", "message": "Cookie harvested from default browser and saved"}, ensure_ascii=False, indent=2))
+        else:
+            console.print(Panel(
+                f"[bold green]✔ 成功直接从默认浏览器中捕获到 {platform} 的登录 Cookie！已自动保存。[/bold green]\n"
+                "[dim]现在直接运行 da \"<网盘链接>\" 即可免登极速下载。[/dim]",
+                border_style="green"
+            ))
+        return True
 
     # 2. Check native desktop app databases
     cookie = credentials_manager._harvest_from_desktop_apps(platform)
     if cookie:
         credentials_manager.save_credential(platform, cookie)
-        console.print(Panel(
-            f"[bold green]✔ 成功从本地桌面客户端数据库捕获到 {platform} 凭据！已自动保存。[/bold green]",
-            border_style="green"
-        ))
-        return
+        if agent_mode:
+            print(json.dumps({"status": "success", "platform": platform, "source": "desktop_app", "message": "Cookie harvested from desktop app database and saved"}, ensure_ascii=False, indent=2))
+        else:
+            console.print(Panel(
+                f"[bold green]✔ 成功从本地桌面客户端数据库捕获到 {platform} 凭据！已自动保存。[/bold green]",
+                border_style="green"
+            ))
+        return True
 
     # 3. Automated Browser Capture window (zero manual copying)
-    console.print("[dim yellow]macOS 提示：默认浏览器 Cookies 受系统保护。即将弹出登录窗口，登录后脚本将自动抓取凭据，无需手动复制！[/dim yellow]")
+    if not agent_mode:
+        console.print("[dim yellow]macOS 提示：默认浏览器 Cookies 受系统保护。即将弹出登录窗口，登录后脚本将自动抓取凭据，无需手动复制！[/dim yellow]")
     login_urls = {
         "quark": "https://pan.quark.cn/",
         "baidu": "https://pan.baidu.com/",
@@ -661,30 +689,53 @@ def _handle_login(platform: str):
     target_url = login_urls.get(platform, f"https://pan.{platform}.com/")
     domain = domains[0]
 
-    grab_bin = shutil.which("grab-cookie") or "/Users/c.k/coding-agent-hub/bin/grab-cookie"
-    if os.path.exists(grab_bin):
+    grab_bin = shutil.which("grab-cookie") or os.getenv("DA_GRAB_COOKIE_BIN", "")
+    if grab_bin and os.path.exists(grab_bin):
         try:
             cmd = [grab_bin, target_url, "--domain", domain, "--no-probe"]
-            subprocess.run(cmd)
-            console.print("[bold green]✔ 凭据捕获完成！现在可直接下载。[/bold green]")
+            result = subprocess.run(cmd)
+            if result.returncode == 0:
+                if agent_mode:
+                    print(json.dumps({"status": "success", "platform": platform, "source": "grab-cookie", "message": "Captured credentials via grab-cookie"}, ensure_ascii=False, indent=2))
+                else:
+                    console.print("[bold green]✔ 凭据捕获完成！现在可直接下载。[/bold green]")
+                return True
+
+            msg = f"grab-cookie exited with code {result.returncode}"
+            if agent_mode:
+                print(json.dumps({"status": "error", "platform": platform, "message": msg}, ensure_ascii=False, indent=2))
+            else:
+                console.print(f"[bold red]自动弹窗抓取失败: {msg}[/bold red]")
+            return False
         except Exception as e:
-            console.print(f"[bold red]自动弹窗抓取失败: {e}[/bold red]")
+            if agent_mode:
+                print(json.dumps({"status": "error", "platform": platform, "message": f"Auto-capture failed: {e}"}, ensure_ascii=False, indent=2))
+            else:
+                console.print(f"[bold red]自动弹窗抓取失败: {e}[/bold red]")
+            return False
     else:
-        console.print(
-            "[bold yellow]💡 一劳永逸全自动方法：[/bold yellow]\n"
-            "在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选当前终端/IDE，\n"
-            "da 就能永久静默自动读取 Chrome/Safari 中的百度/夸克 Cookie，无需任何操作！"
+        msg = (
+            f"未检测到本地已登录凭据。可在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选终端，"
+            f"或手动设置环境变量: export DA_{platform.upper()}_COOKIE='...'"
         )
+        if agent_mode:
+            print(json.dumps({"status": "error", "platform": platform, "message": msg}, ensure_ascii=False, indent=2))
+        else:
+            console.print(
+                "[bold yellow]💡 一劳永逸全自动方法：[/bold yellow]\n"
+                "在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选当前终端/IDE，\n"
+                f"da 就能永久静默自动读取 Chrome/Safari 中的 {platform} Cookie，无需任何操作！"
+            )
+        return False
 
 
-def _handle_doctor(subtarget: Optional[str], agent_mode: bool):
+def _handle_doctor(subtarget: Optional[str], agent_mode: bool, fix: bool = False):
     """Diagnose Python environment, dependencies, and external utilities."""
     from core.doctor import Doctor
-    fix = (subtarget in ("--fix", "-f") or "--fix" in sys.argv)
-    if fix:
+    if fix or (subtarget in ("--fix", "-f")) or ("--fix" in sys.argv):
         if not agent_mode:
             console.print("[bold yellow]正在自动修复缺失的 Python 依赖包...[/bold yellow]")
-        Doctor.auto_repair()
+        Doctor.auto_repair(capture_output=agent_mode)
 
     report = Doctor.check_all()
     if agent_mode:

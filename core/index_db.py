@@ -39,17 +39,19 @@ class AssetIndexDB:
         return conn
 
     @classmethod
-    def _compute_key(cls, url: str) -> str:
+    def _compute_key(cls, url: str, variant: str = "default") -> str:
         clean = url.strip().lower()
+        if variant != "default":
+            clean = f"{variant.strip().lower()}\n{clean}"
         return hashlib.sha256(clean.encode("utf-8")).hexdigest()
 
     @classmethod
-    def query(cls, url: str) -> Optional[Dict[str, Any]]:
+    def query(cls, url: str, variant: str = "default") -> Optional[Dict[str, Any]]:
         """
         Check if target URL has already been downloaded and verified on disk.
         Returns dict if valid cache hit, or None.
         """
-        key = cls._compute_key(url)
+        key = cls._compute_key(url, variant=variant)
         try:
             with cls._get_connection() as conn:
                 cur = conn.execute(
@@ -97,10 +99,11 @@ class AssetIndexDB:
         output_dir: Path,
         primary_file: Path,
         size_bytes: int,
-        sidecars: Optional[Dict[str, str]] = None
+        sidecars: Optional[Dict[str, str]] = None,
+        variant: str = "default",
     ):
         """Save a successful download to the index."""
-        key = cls._compute_key(url)
+        key = cls._compute_key(url, variant=variant)
         # Compute sha256 of primary file for integrity
         sha256_hash = ""
         try:

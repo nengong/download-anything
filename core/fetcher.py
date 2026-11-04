@@ -53,6 +53,11 @@ class Fetcher:
                 content = base64.b64decode(encoded)
             else:
                 content = urllib.parse.unquote_to_bytes(encoded)
+            if len(content) > self.options.max_bytes:
+                raise FileTooLargeError(
+                    f"Asset size ({len(content) / (1024*1024):.1f}MB) exceeds "
+                    f"maximum allowed limit ({self.options.max_bytes / (1024*1024):.1f}MB)"
+                )
             dest_path.write_bytes(content)
             if progress_callback:
                 progress_callback(len(content), len(content))
@@ -65,9 +70,19 @@ class Fetcher:
             # urlparse / url2pathname handles file:///path
             parsed_path = urllib.request.url2pathname(url[7:])
             local_src = Path(parsed_path)
+            if local_src.exists() and local_src.stat().st_size > self.options.max_bytes:
+                raise FileTooLargeError(
+                    f"Asset size ({local_src.stat().st_size / (1024*1024):.1f}MB) exceeds "
+                    f"maximum allowed limit ({self.options.max_bytes / (1024*1024):.1f}MB)"
+                )
             if local_src != dest_path and local_src.exists():
                 shutil.copy2(local_src, dest_path)
             content_len = dest_path.stat().st_size if dest_path.exists() else 0
+            if content_len > self.options.max_bytes:
+                raise FileTooLargeError(
+                    f"Asset size ({content_len / (1024*1024):.1f}MB) exceeds "
+                    f"maximum allowed limit ({self.options.max_bytes / (1024*1024):.1f}MB)"
+                )
             if progress_callback:
                 progress_callback(content_len, content_len)
             return content_len

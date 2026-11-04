@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from core.exceptions import ExtractionError
+from core.exceptions import ExtractionError, AuthenticationRequiredError
 from drivers.base import BaseDriver, AssetPackage, TargetAsset
 
 class NotionPublicDriver(BaseDriver):
@@ -45,7 +45,16 @@ class NotionPublicDriver(BaseDriver):
 
         try:
             resp = session.get(clean, timeout=12)
+            redirected = urlparse(resp.url)
+            is_login_redirect = (
+                redirected.hostname in ("notion.so", "www.notion.so")
+                and redirected.path.lower().rstrip("/") == "/login"
+            )
+            if resp.status_code in (401, 403) or is_login_redirect:
+                raise AuthenticationRequiredError(f"Notion page is private or requires login: {url}")
             html = resp.text
+        except AuthenticationRequiredError:
+            raise
         except Exception as e:
             raise ExtractionError(f"Failed to fetch Notion public page: {e}")
 

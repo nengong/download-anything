@@ -209,3 +209,70 @@ def test_failed_mp3_transcode_preserves_real_audio_extension(tmp_path, payload, 
     assert primary.stat().st_size == len(payload)
     assert not primary.with_suffix(".mp3").exists()
     assert not primary.with_suffix(".raw_audio").exists()
+
+
+def test_audio_only_cache_variant_is_independent(tmp_path, monkeypatch):
+    monkeypatch.setattr(AssetIndexDB, "DB_DIR", tmp_path)
+    monkeypatch.setattr(AssetIndexDB, "DB_PATH", tmp_path / "index.db")
+    video = tmp_path / "video.mp4"
+    audio = tmp_path / "audio.m4a"
+    video.write_bytes(b"video")
+    audio.write_bytes(b"audio")
+    url = "https://example.com/asset"
+
+    AssetIndexDB.record(url, "test", "Default", tmp_path, video, 5)
+    AssetIndexDB.record(url, "test", "Audio", tmp_path, audio, 5, variant="audio-only")
+
+    assert AssetIndexDB.query(url)["primary_asset"] == str(video.resolve())
+    assert AssetIndexDB.query(url, variant="audio-only")["primary_asset"] == str(audio.resolve())
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"transcribe": True},
+        {"vault": "/tmp/vault"},
+        {"notion": True},
+        {"output_dir": "/tmp/new-output"},
+    ],
+)
+def test_cache_hit_does_not_suppress_requested_postprocessing(options):
+    cached = {"status": "cached", "cached": True, "primary_asset": "/tmp/original"}
+    with patch("cli.AssetIndexDB.query", return_value=cached) as query, \
+         patch("cli.Router.route", side_effect=RuntimeError("cache bypassed")):
+        with pytest.raises(RuntimeError, match="cache bypassed"):
+            process_download("https://example.com/asset", agent_mode=True, **options)
+    query.assert_not_called()
+
+
+def test_audio_only_queries_dedicated_cache_variant():
+    with patch("cli.AssetIndexDB.query", return_value=None) as query, \
+         patch("cli.Router.route", side_effect=RuntimeError("stop after cache query")):
+        with pytest.raises(RuntimeError, match="stop after cache query"):
+            process_download("https://example.com/asset", agent_mode=True, audio_only=True)
+    assert query.call_args_list
+    assert all(
+        call.args == ("https://example.com/asset",) and call.kwargs == {"variant": "audio-only"}
+        for call in query.call_args_list
+    )
+
+
+def test_audio_only_failure_preserves_video_and_reports_error(tmp_path):
+    package = _data_package("content.mp4", b"\x00" * 2000)
+    driver = _StubDriver(package)
+    with patch("cli.get_default_drivers", return_value=[driver]), \
+         patch("cli.AssetIndexDB.query", return_value=None), \
+         patch("cli.AssetIndexDB.record"), \
+         patch("cli._extract_audio_from_video", return_value=None):
+        with pytest.raises(DAError, match="Audio extraction failed"):
+            process_download(
+                "https://example.com/video",
+                output_dir=str(tmp_path),
+                audio_only=True,
+                no_sidecar=True,
+                agent_mode=True,
+            )
+
+    videos = list(tmp_path.rglob("Track.mp4"))
+    assert len(videos) == 1
+    assert videos[0].stat().st_size == 2000

@@ -103,7 +103,7 @@ class Doctor:
         return report
 
     @staticmethod
-    def auto_repair() -> bool:
+    def auto_repair(capture_output: bool = False) -> bool:
         """
         Automatically install missing Python dependencies using uv (fast) or pip.
         Returns True if all required dependencies succeed.
@@ -127,7 +127,12 @@ class Doctor:
             cmd = [py_executable, "-m", "pip", "install"] + missing
 
         try:
-            res = subprocess.run(cmd, check=True)
+            output_options = (
+                {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+                if capture_output
+                else {}
+            )
+            res = subprocess.run(cmd, check=True, **output_options)
             return res.returncode == 0
         except Exception:
             return False

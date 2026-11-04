@@ -5,9 +5,39 @@ import os
 import sqlite3
 import subprocess
 import hashlib
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import yaml
+
+
+@contextmanager
+def _credential_file_lock(cred_file: Path):
+    """Serialize credential read-modify-write cycles across processes."""
+    lock_path = cred_file.with_name(cred_file.name + ".lock")
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    with open(fd, "r+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
 
 class CredentialsManager:
     """
@@ -242,16 +272,33 @@ class CredentialsManager:
         return None
 
     def save_credential(self, platform: str, cookie: str, section: str = "pan"):
-        """Save a newly captured cookie into config/credentials.yaml."""
-        cred_file = self.config_dir / "credentials.yaml"
-        data = self._load_yaml()
-        if section not in data:
-            data[section] = {}
-        if platform not in data[section]:
-            data[section][platform] = {}
-        data[section][platform]["cookie"] = cookie
-        with open(cred_file, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True)
+        """Atomically save a credential with 0600 permissions without losing concurrent updates."""
+        target_dir = self.config_dir
+        cred_file = target_dir / "credentials.yaml"
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        with _credential_file_lock(cred_file):
+            # Another process may have updated the file since this manager last read it.
+            self._cached_yaml = None
+            data = self._load_yaml()
+            if section not in data:
+                data[section] = {}
+            if platform not in data[section]:
+                data[section][platform] = {}
+            data[section][platform]["cookie"] = cookie
+
+            fd, tmp_name = tempfile.mkstemp(prefix=".credentials.", suffix=".tmp", dir=str(target_dir))
+            tmp_file = Path(tmp_name)
+            try:
+                with open(fd, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(data, f, allow_unicode=True)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_file, cred_file)
+                os.chmod(cred_file, 0o600)
+            finally:
+                tmp_file.unlink(missing_ok=True)
+
         self._cached_yaml = data
         self._browser_cookie_cache[platform] = cookie
 

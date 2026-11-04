@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from core.exceptions import ExtractionError
+from core.exceptions import ExtractionError, AuthenticationRequiredError
 from drivers.base import BaseDriver, AssetPackage, TargetAsset
 
 class FeishuDocDriver(BaseDriver):
@@ -47,7 +47,11 @@ class FeishuDocDriver(BaseDriver):
 
         try:
             resp = session.get(clean, timeout=12)
+            if resp.status_code in (401, 403) or "passport.feishu.cn" in resp.url or "passport.larksuite.com" in resp.url:
+                raise AuthenticationRequiredError(f"Feishu document requires login or access permission: {url}")
             html = resp.text
+        except AuthenticationRequiredError:
+            raise
         except Exception as e:
             raise ExtractionError(f"Failed to fetch Feishu document page: {e}")
 
