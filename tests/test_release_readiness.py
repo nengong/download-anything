@@ -80,8 +80,8 @@ def test_feishu_body_survives_pipeline(tmp_path):
                          text="<html><title>Doc</title><main><p>UNIQUE_BODY_SENTINEL</p></main></html>")
     with patch("drivers.docs.feishu.requests.Session.get", return_value=response):
         result = run(FeishuDocDriver(), tmp_path, target="https://demo.feishu.cn/docx/demo")
-    assert "UNIQUE_BODY_SENTINEL" in Path(result["primary_asset"]).read_text()
-    assert "UNIQUE_BODY_SENTINEL" in Path(result["sidecars"]["markdown"]).read_text()
+    assert "UNIQUE_BODY_SENTINEL" in Path(result["primary_asset"]).read_text(encoding="utf-8")
+    assert "UNIQUE_BODY_SENTINEL" in Path(result["sidecars"]["markdown"]).read_text(encoding="utf-8")
 
 
 def test_quark_preflight_never_transfers_or_creates_folders(tmp_path):
@@ -349,10 +349,10 @@ def test_unproven_416_response_never_promotes_partial_file(tmp_path):
 def test_obsidian_quoted_title_is_valid_yaml(tmp_path):
     assets = tmp_path / "assets"
     assets.mkdir()
-    (assets / "note.md").write_text("body")
+    (assets / "note.md").write_text("body", encoding="utf-8")
     title = 'A "quoted" title\\path\nnext'
     note = VaultSync.sync_to_obsidian(assets, str(tmp_path / "vault"), title=title)
-    assert yaml.safe_load(note.read_text().split("---", 2)[1])["title"] == title
+    assert yaml.safe_load(note.read_text(encoding="utf-8").split("---", 2)[1])["title"] == title
 
 
 def test_partial_cli_exit_code_and_batch_counts():
@@ -369,7 +369,7 @@ def test_partial_cli_exit_code_and_batch_counts():
 
 def test_skill_frontmatter_is_distributable():
     root = Path(__file__).resolve().parents[1]
-    text = (root / "skills/download-anything/SKILL.md").read_text()
+    text = (root / "skills/download-anything/SKILL.md").read_text(encoding="utf-8")
     frontmatter = yaml.safe_load(text.split("---", 2)[1])
     assert frontmatter["name"] == "download-anything"
     assert not any(char in frontmatter["description"] for char in "<>")

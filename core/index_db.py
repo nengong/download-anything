@@ -6,6 +6,7 @@ Prevents redundant downloads, tracks SHA256 checksums, and delivers instant cach
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -18,26 +19,37 @@ class AssetIndexDB:
     DB_PATH = DB_DIR / "index.db"
 
     @classmethod
-    def _get_connection(cls) -> sqlite3.Connection:
+    @contextmanager
+    def _connection(cls):
+        """Open a connection that commits on success and always closes.
+
+        sqlite3's `with conn` only manages the transaction; it never closes
+        the connection. Leaked handles keep the DB file locked on Windows,
+        so every operation must go through this context manager.
+        """
         cls.DB_DIR.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(cls.DB_PATH))
         conn.row_factory = sqlite3.Row
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS asset_index (
-                    url_key TEXT PRIMARY KEY,
-                    original_url TEXT,
-                    title TEXT,
-                    platform TEXT,
-                    output_dir TEXT,
-                    primary_file TEXT,
-                    size_bytes INTEGER,
-                    sha256 TEXT,
-                    sidecars_json TEXT,
-                    created_at TEXT
-                )
-            """)
-        return conn
+        try:
+            with conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS asset_index (
+                        url_key TEXT PRIMARY KEY,
+                        original_url TEXT,
+                        title TEXT,
+                        platform TEXT,
+                        output_dir TEXT,
+                        primary_file TEXT,
+                        size_bytes INTEGER,
+                        sha256 TEXT,
+                        sidecars_json TEXT,
+                        created_at TEXT
+                    )
+                """)
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     @classmethod
     def _compute_key(cls, url: str, variant: str = "default") -> str:
@@ -59,7 +71,7 @@ class AssetIndexDB:
         """
         key = cls._compute_key(url, variant=variant)
         try:
-            with cls._get_connection() as conn:
+            with cls._connection() as conn:
                 cur = conn.execute(
                     "SELECT * FROM asset_index WHERE url_key = ?",
                     (key,)
@@ -125,7 +137,7 @@ class AssetIndexDB:
         sidecars_str = json.dumps(sidecars or {}, ensure_ascii=False)
 
         try:
-            with cls._get_connection() as conn:
+            with cls._connection() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO asset_index (
                         url_key, original_url, title, platform, output_dir, primary_file,

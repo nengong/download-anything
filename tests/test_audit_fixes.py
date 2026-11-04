@@ -48,6 +48,7 @@ def test_cli_login_json_option():
         assert '"platform": "quark"' in result.output
         save.assert_called_once_with("quark", "test_cookie=123")
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 0600 modes do not exist on Windows; chmod is a no-op there")
 def test_credentials_safe_0600_permissions():
     with tempfile.TemporaryDirectory() as td:
         cfg_dir = Path(td)

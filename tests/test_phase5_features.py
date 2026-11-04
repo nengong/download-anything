@@ -7,6 +7,7 @@ Unit Tests for Phase 5 Features:
 """
 import io
 import json
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -61,6 +62,8 @@ def test_unpacker_zip_slip_defense():
         assert (dest / "legit.txt").exists()
 
 def test_unpacker_password_protected_zip():
+    if shutil.which("zip") is None:
+        pytest.skip("The 'zip' CLI is not preinstalled on Windows runners")
     with tempfile.TemporaryDirectory() as td:
         tpath = Path(td)
         f = tpath / "payload.txt"
