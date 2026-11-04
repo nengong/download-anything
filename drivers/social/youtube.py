@@ -54,6 +54,7 @@ class YouTubeDriver(BaseDriver):
         # Select stream
         formats = info.get("formats", [])
         chosen_format = None
+        progressive_mp4s = []
         audio_only = kwargs.get("audio_only", False)
 
         if audio_only:

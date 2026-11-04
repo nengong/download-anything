@@ -28,7 +28,8 @@ from core.unpacker import Unpacker
 from core.index_db import AssetIndexDB
 from core.vault_sync import VaultSync
 from core.transcriber import CloudTranscriber
-from core.path_resolver import resolve_output_directory, sanitize_filename, get_system_downloads_dir
+from core.music_unlocker import MusicUnlocker
+from core.path_resolver import resolve_output_directory, resolve_asset_path, sanitize_filename, get_system_downloads_dir
 from drivers import get_default_drivers
 from drivers.base import AssetPackage, TargetAsset
 
@@ -155,7 +156,8 @@ def process_download(
         inactivity_timeout=45
     ))
 
-    dest_file = base_dir / primary_asset.filename
+    dest_file = resolve_asset_path(base_dir, primary_asset.filename)
+    primary_asset.filename = str(dest_file.relative_to(base_dir.resolve()))
 
     # Fetch Primary Asset
     if not agent_mode:
@@ -214,7 +216,8 @@ def process_download(
             companion.filename = f"{clean_title}.subtitle{comp_ext or '.srt'}" if clean_title != "untitled_asset" else "subtitle.srt"
             subtitle_filename = companion.filename
 
-        comp_dest = base_dir / companion.filename
+        comp_dest = resolve_asset_path(base_dir, companion.filename)
+        companion.filename = str(comp_dest.relative_to(base_dir.resolve()))
         try:
             fetcher.download(
                 url=companion.url,
@@ -239,10 +242,45 @@ def process_download(
             downloaded_size = dest_file.stat().st_size
             primary_asset.downloaded_bytes = downloaded_size
 
+    # Normalize non-MP3 audio streams saved with an .mp3 suffix.
+    expected_verify_size = primary_asset.expected_size if not audio_only else None
+    if dest_file.suffix.lower() == ".mp3" and dest_file.exists() and dest_file.stat().st_size > 16:
+        with open(dest_file, "rb") as f_head:
+            h16 = f_head.read(16)
+        is_native_mp3 = h16.startswith(b"ID3") or (len(h16) >= 2 and h16[0] == 0xFF and (h16[1] & 0xE0) == 0xE0)
+        container_ext = None
+        if h16.startswith(b"\x1a\x45\xdf\xa3"):
+            container_ext = ".webm"
+        elif len(h16) >= 8 and h16[4:8] == b"ftyp":
+            container_ext = ".m4a"
+        elif h16.startswith(b"OggS"):
+            container_ext = ".ogg"
+        elif h16.startswith(b"fLaC"):
+            container_ext = ".flac"
+        elif h16.startswith(b"RIFF") and b"WAVE" in h16[:16]:
+            container_ext = ".wav"
+
+        if not is_native_mp3 and container_ext:
+            tmp_raw = dest_file.with_suffix(".raw_audio")
+            dest_file.replace(tmp_raw)
+            cover_p = (base_dir / cover_filename) if cover_filename and (base_dir / cover_filename).exists() else None
+            if MusicUnlocker.transcode_to_mp3(tmp_raw, dest_file, cover_path=cover_p, metadata={"title": package.title}):
+                tmp_raw.unlink(missing_ok=True)
+                downloaded_size = dest_file.stat().st_size
+                primary_asset.downloaded_bytes = downloaded_size
+                expected_verify_size = None
+            else:
+                # Preserve a playable asset with its real extension instead of mislabeling it as MP3.
+                dest_file.unlink(missing_ok=True)
+                dest_file = dest_file.with_suffix(container_ext)
+                tmp_raw.replace(dest_file)
+                primary_asset.filename = dest_file.name
+                primary_asset.local_path = dest_file
+
     # Rigorous Verification
     verification = Verifier.verify(
         dest_file,
-        expected_size=primary_asset.expected_size if not audio_only else None,
+        expected_size=expected_verify_size,
         expected_ext=dest_file.suffix
     )
 

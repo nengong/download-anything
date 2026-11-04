@@ -5,14 +5,18 @@ Unit Tests for Advanced Capabilities:
 - Cloud Speech-to-Text Transcription Hook (CloudTranscriber)
 - Feishu & Notion Public Document Drivers
 """
+import base64
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
 from core.index_db import AssetIndexDB
+from core.exceptions import DAError
 from core.vault_sync import VaultSync
 from core.transcriber import CloudTranscriber
+from drivers.base import AssetPackage, TargetAsset
+from cli import process_download
 from drivers.docs.feishu import FeishuDocDriver
 from drivers.docs.notion import NotionPublicDriver
 
@@ -124,3 +128,84 @@ def test_notion_driver_can_handle():
     assert driver.can_handle("https://antigravity.notion.site/Guide-1234567890abcdef")
     assert driver.can_handle("https://www.notion.so/My-Project-Plan-067dd719a912471ea9a3ac2f029e4720")
     assert not driver.can_handle("https://bilibili.com")
+
+
+class _StubDriver:
+    name = "stub"
+    category = "test"
+
+    def __init__(self, package):
+        self.package = package
+
+    def can_handle(self, url):
+        return True
+
+    def extract(self, url, **kwargs):
+        return self.package
+
+    def cleanup(self, package):
+        pass
+
+
+def _data_package(filename, payload):
+    uri = "data:application/octet-stream;base64," + base64.b64encode(payload).decode("ascii")
+    return AssetPackage(
+        title="Track",
+        platform="stub",
+        assets=[TargetAsset(
+            url=uri,
+            filename=filename,
+            file_type="primary",
+            expected_size=len(payload),
+        )],
+        metadata={},
+    )
+
+
+def test_process_download_rejects_unsafe_primary_filename(tmp_path):
+    package = _data_package("../escaped.txt", b"unsafe")
+    driver = _StubDriver(package)
+    with patch("cli.get_default_drivers", return_value=[driver]), \
+         patch("cli.AssetIndexDB.query", return_value=None), \
+         patch("cli.AssetIndexDB.record"):
+        with pytest.raises(DAError, match="Unsafe asset filename"):
+            process_download(
+                "https://example.com/unsafe",
+                output_dir=str(tmp_path),
+                no_sidecar=True,
+                agent_mode=True,
+            )
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "payload, expected_suffix",
+    [
+        (b"\x00\x00\x00\x20ftypM4A " + b"\x00" * 64, ".m4a"),
+        (b"\x1a\x45\xdf\xa3" + b"\x00" * 64, ".webm"),
+        (b"OggS" + b"\x00" * 64, ".ogg"),
+        (b"fLaC" + b"\x00" * 64, ".flac"),
+        (b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * 64, ".wav"),
+    ],
+)
+def test_failed_mp3_transcode_preserves_real_audio_extension(tmp_path, payload, expected_suffix):
+    package = _data_package("content.mp3", payload)
+    driver = _StubDriver(package)
+    with patch("cli.get_default_drivers", return_value=[driver]), \
+         patch("cli.AssetIndexDB.query", return_value=None), \
+         patch("cli.AssetIndexDB.record"), \
+         patch("cli.MusicUnlocker.transcode_to_mp3", return_value=False):
+        result = process_download(
+            "https://example.com/audio",
+            output_dir=str(tmp_path),
+            no_sidecar=True,
+            agent_mode=True,
+        )
+
+    primary = Path(result["primary_asset"])
+    assert result["status"] == "success"
+    assert primary.suffix == expected_suffix
+    assert primary.exists()
+    assert primary.stat().st_size == len(payload)
+    assert not primary.with_suffix(".mp3").exists()
+    assert not primary.with_suffix(".raw_audio").exists()

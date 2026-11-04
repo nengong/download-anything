@@ -6,8 +6,10 @@ import os
 import re
 import sys
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
+
+from core.exceptions import DAError
 
 def sanitize_filename(name: str, max_length: int = 80) -> str:
     r"""
@@ -31,6 +33,33 @@ def sanitize_filename(name: str, max_length: int = 80) -> str:
         clean = clean[:max_length].rstrip(" ._-")
         
     return clean
+
+
+def resolve_asset_path(base_dir: Path, filename: str) -> Path:
+    """Resolve a driver-provided asset filename without allowing directory escapes."""
+    raw_name = str(filename or "").strip()
+    normalized = raw_name.replace("\\", "/")
+    raw_path = PurePosixPath(normalized)
+    if (
+        not raw_name
+        or raw_path.is_absolute()
+        or re.match(r"^[a-zA-Z]:", normalized)
+        or ".." in raw_path.parts
+    ):
+        raise DAError(f"Unsafe asset filename: {raw_name or '<empty>'}")
+
+    clean_parts = [sanitize_filename(part) for part in raw_path.parts if part != "."]
+    if not clean_parts:
+        raise DAError(f"Unsafe asset filename: {raw_name}")
+
+    base = base_dir.resolve()
+    target = base.joinpath(*clean_parts).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise DAError(f"Asset path escapes output directory: {raw_name}")
+    return target
+
 
 def get_system_downloads_dir() -> Path:
     """
@@ -80,6 +109,9 @@ def detect_workspace_dir() -> Optional[Path]:
     search_dirs = ["downloads", "download", "assets", "media", "data", "output", "files"]
 
     for base in candidates:
+        # Do not treat the Download-Anything tool repository itself as a target project workspace
+        if (base / "cli.py").exists() and (base / "drivers").is_dir() and (base / "core").is_dir():
+            continue
         has_project_marker = any((base / marker).exists() for marker in [
             ".git", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", ".gemini"
         ])
@@ -101,8 +133,8 @@ def resolve_output_directory(
     Hierarchical output directory resolution:
     1. Explicit CLI argument `-o / --output-dir <path>`
     2. Environment variable `DA_OUTPUT_DIR`
-    3. Workspace semantic directory (e.g. `./downloads` if running inside a project)
-    4. OS Native Downloads folder (`~/Downloads/DownloadAnything`)
+    3. Workspace semantic directory (e.g. `./downloads` if running inside a user project)
+    4. OS Native Downloads folder (`~/Downloads/DA`)
     """
     # 1. Explicit path
     if explicit_path:
@@ -118,8 +150,8 @@ def resolve_output_directory(
             if workspace_dir:
                 base = workspace_dir
             else:
-                # 4. OS native Downloads fallback
-                base = get_system_downloads_dir() / "DownloadAnything"
+                # 4. OS native Downloads fallback (matches SKILL.md & config.yaml: ~/Downloads/DA)
+                base = get_system_downloads_dir() / "DA"
 
     # Create subfolder per asset: [YYYY-MM-DD]_[clean_title]
     if create_subfolder and title:
