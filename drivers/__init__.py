@@ -26,6 +26,8 @@ from drivers.audio.open_music import OpenMusicDriver
 from drivers.audio.local_audio import LocalAudioDriver
 from drivers.docs.wechat import WeChatDriver
 from drivers.docs.web_article import WebArticleDriver
+from drivers.docs.feishu import FeishuDocDriver
+from drivers.docs.notion import NotionPublicDriver
 from drivers.software.ms_store import MicrosoftStoreDriver
 from drivers.software.apk import AndroidAPKDriver
 
@@ -54,6 +56,8 @@ def get_default_drivers() -> List[BaseDriver]:
         XiaoyuzhouDriver(),
         ApplePodcastsDriver(),
         WeChatDriver(),
+        FeishuDocDriver(),
+        NotionPublicDriver(),
         WebArticleDriver(),
         MicrosoftStoreDriver(),
         AndroidAPKDriver(),

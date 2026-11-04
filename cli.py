@@ -25,6 +25,9 @@ from core.router import Router
 from core.sidecar import SidecarWriter
 from core.verifier import Verifier
 from core.unpacker import Unpacker
+from core.index_db import AssetIndexDB
+from core.vault_sync import VaultSync
+from core.transcriber import CloudTranscriber
 from core.path_resolver import resolve_output_directory, sanitize_filename, get_system_downloads_dir
 from drivers import get_default_drivers
 from drivers.base import AssetPackage, TargetAsset
@@ -74,9 +77,28 @@ def process_download(
     agent_mode: bool = False,
     verbose: bool = False,
     audio_only: bool = False,
-    auto_unzip: bool = True
+    auto_unzip: bool = True,
+    force: bool = False,
+    vault: Optional[str] = None,
+    notion: bool = False,
+    transcribe: bool = False
 ) -> Dict[str, Any]:
     """Core download pipeline for a single target."""
+    # 0. Local Deduplication Check (skip re-downloading if already cached and intact)
+    if not check and not force:
+        cached = AssetIndexDB.query(target_text)
+        if cached:
+            if not agent_mode:
+                console.print(Panel(
+                    f"[bold green]✔ [本地缓存命中][/bold green] 该资产本地已存在，跳过重复下载：\n"
+                    f"[dim]• 主资产:[/dim] {cached['primary_asset']}\n"
+                    f"[dim]• 目录:[/dim] {cached['output_dir']}\n"
+                    f"[dim]• 归档时间:[/dim] {cached['created_at']}\n"
+                    f"[dim]提示: 如需强制重新下载，可追加 --force 或 -f[/dim]",
+                    border_style="green"
+                ))
+            return cached
+
     router = Router(get_default_drivers())
     driver, clean_input = router.route(target_text, explicit_password=password)
 
@@ -271,6 +293,59 @@ def process_download(
     if subtitle_filename and (base_dir / subtitle_filename).exists():
         sidecar_dict["subtitle"] = str((base_dir / subtitle_filename).resolve())
 
+    # 10. Cloud Speech Transcription Hook (Whisper API without local heavy models)
+    if transcribe and (audio_only or dest_file.suffix.lower() in {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"}):
+        if not agent_mode:
+            console.print("[dim cyan]🎙️ 正在调用轻量云端 Whisper 极速转写生成全文稿...[/dim cyan]")
+        transcript_file = CloudTranscriber.transcribe(dest_file, base_dir, clean_title)
+        if transcript_file:
+            sidecar_dict["transcript"] = str(transcript_file.resolve())
+            if not agent_mode:
+                console.print(f"[bold green]✔ [语音文字稿就绪][/bold green] {transcript_file.name}")
+        elif not agent_mode:
+            console.print("[dim yellow]💡 语音转写提示: 未检测到 GROQ_API_KEY 或 OPENAI_API_KEY 环境变量，已跳过转写。[/dim yellow]")
+
+    # 11. Downstream Personal Knowledge-Base Sync (Obsidian & Notion)
+    obsidian_note = None
+    if vault or os.getenv("OBSIDIAN_VAULT_PATH") or os.getenv("DA_VAULT_PATH"):
+        obsidian_note = VaultSync.sync_to_obsidian(
+            asset_dir=base_dir,
+            vault_path=vault,
+            title=package.title,
+            platform=package.platform,
+            original_url=clean_input.url
+        )
+        if obsidian_note:
+            sidecar_dict["obsidian_vault_note"] = str(obsidian_note.resolve())
+            if not agent_mode:
+                console.print(f"[bold green]✔ [Obsidian 双链库同步成功][/bold green] {obsidian_note}")
+
+    if notion:
+        notion_res = VaultSync.sync_to_notion(
+            title=package.title,
+            markdown_body=package.metadata.get("sidecar_text", ""),
+            platform=package.platform,
+            original_url=clean_input.url,
+            cover_url=package.assets[1].url if len(package.assets) > 1 else None
+        )
+        if notion_res.get("success"):
+            sidecar_dict["notion_page"] = notion_res.get("notion_page_url", "pushed")
+            if not agent_mode:
+                console.print(f"[bold green]✔ [Notion 页面推送成功][/bold green] {notion_res.get('notion_page_url')}")
+        elif not agent_mode:
+            console.print(f"[dim yellow]💡 Notion 提示: {notion_res.get('reason')}[/dim yellow]")
+
+    # 12. Record in Local Asset Index DB for Deduplication
+    AssetIndexDB.record(
+        url=clean_input.url,
+        platform=package.platform,
+        title=package.title,
+        output_dir=base_dir,
+        primary_file=dest_file,
+        size_bytes=downloaded_size,
+        sidecars=sidecar_dict
+    )
+
     return {
         "status": "success",
         "platform": package.platform,
@@ -294,6 +369,10 @@ def process_download(
 @click.option("-o", "--output-dir", help="Output directory path (default: ~/Downloads/DA/<folder>)")
 @click.option("-p", "--password", help="Explicit password/passcode if not embedded in input")
 @click.option("-a", "--audio", "--audio-only", is_flag=True, help="Extract audio-only stream (.mp3/.m4a) to save bandwidth and storage")
+@click.option("-f", "--force", is_flag=True, help="Force re-download even if already present in local asset cache")
+@click.option("--vault", "--obsidian", help="Sync downloaded notes, media, and frontmatter to Obsidian Vault path")
+@click.option("--notion", is_flag=True, help="Sync note record to Notion database (requires NOTION_API_KEY)")
+@click.option("--transcribe", is_flag=True, help="Transcribe speech/podcast audio using ultra-light cloud Whisper API")
 @click.option("--unzip/--no-unzip", default=True, help="Automatically extract password-protected or standard archives upon download (default: True)")
 @click.option("--max-mb", default=500, type=int, help="Maximum allowed file size in MB (default: 500)")
 @click.option("--check", is_flag=True, help="Dry run: inspect and extract metadata without downloading")
@@ -306,6 +385,10 @@ def main(
     output_dir: Optional[str],
     password: Optional[str],
     audio: bool,
+    force: bool,
+    vault: Optional[str],
+    notion: bool,
+    transcribe: bool,
     unzip: bool,
     max_mb: int,
     check: bool,
@@ -383,7 +466,11 @@ def main(
                 agent_mode=agent_mode,
                 verbose=verbose,
                 audio_only=audio,
-                auto_unzip=unzip
+                auto_unzip=unzip,
+                force=force,
+                vault=vault,
+                notion=notion,
+                transcribe=transcribe
             )
         except Exception as e:
             _handle_error(e, agent_mode)
@@ -437,7 +524,11 @@ def main(
                 agent_mode=agent_mode,
                 verbose=verbose,
                 audio_only=audio,
-                auto_unzip=unzip
+                auto_unzip=unzip,
+                force=force,
+                vault=vault,
+                notion=notion,
+                transcribe=transcribe
             )
             item_res["target"] = target
             results.append(item_res)

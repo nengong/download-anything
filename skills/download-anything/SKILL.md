@@ -1,135 +1,95 @@
 ---
 name: download-anything
-description: Universal micro-asset (<500MB) extraction and offline archiving hub. Use when downloading books, papers/DOIs, unwatermarked videos/images (Xiaohongshu, Douyin, Bilibili, YouTube, Twitter/X, Instagram, Weibo), music (NetEase Cloud Music, Spotify, Apple Music, Open/CC music repositories), proprietary encrypted formats (NCM decrypting), podcasts (Xiaoyuzhou, Apple Podcasts), novels, web articles to clean Markdown, Microsoft Store (.msixbundle) or Android (.apk) offline packages, with full metadata sidecars, auto-unzip, audio-only extraction, and zero false-positive verification.
+description: Universal micro-asset (<500MB) extraction and offline archiving hub. Use when downloading books, papers/DOIs, unwatermarked videos/images (Xiaohongshu, Douyin, Bilibili, YouTube, Twitter/X, Instagram, Weibo), music (NetEase Cloud Music, Spotify, Apple Music, Open/CC audio), cloud docs (Feishu/Lark docs, Notion public pages, WeChat articles), proprietary formats (NCM decrypting), podcasts, with automatic local deduplication, Obsidian vault sync, cloud Whisper transcription, and zero false-positive verification.
 ---
 
 # Download Anything (DA)
 
 CLI 命令行入口：`/Users/c.k/Documents/download-anything/bin/da`（全局软链命令：`da` 或 `dl`）。
 
-## 1. 核心定位与设计哲学
+## 1. 核心定位与极简设计哲学
 
 专为人类创作者与 AI Agent 打造的 **500MB 以内高信息密度微资产提取与离线沉淀中枢**。
+- **极度轻量，按需复用**：
+  - 核心源码**不到 1 MB**（约 750KB），**绝不捆绑几 GB 的臃肿 AI 模型权重**。
+  - **无需自带打包 `.venv`**：DA 优先自动复用本机或 Python 宿主环境既有的依赖包，零侵入、零冗余。
+- **本地去重索引库 (`AssetIndexDB`)**：
+  - 基于 Python 原生标准库 SQLite，自动记录 `URL -> SHA256 -> 本地路径`（`~/.download-anything/index.db`）。
+  - 重复投喂同一链接时 **5 毫秒内命中缓存直接返回**，不消耗网络带宽。支持 `-f / --force` 强制刷新。
+- **个人知识库闭环 (Obsidian & Notion Vault)**：
+  - 支持 `--vault <路径>` 或 `--obsidian`：一键自动将生成的 Markdown 笔记、高清封面与媒体注入用户的 Obsidian Vault，自动补全 YAML frontmatter（含来源、标签、日期）。
+  - 支持 `--notion`：一键推送到用户的个人 Notion Database。
+- **极轻量云端语音转写挂钩 (`--transcribe`)**：
+  - 采用轻量 API 钩子（支持 Groq / OpenAI / 硅基流动 Whisper）。
+  - 云端大模型转写质量远超本地轻量 CPU 模型，2秒完成播客或演讲全文转写并生成 `[标题].transcript.md`。
 - **输入杂质免疫**：支持整段投喂移动端混合分享口令（包含广告文字、换行、提取码）。
 - **全要素资产伴生**：主资产落盘的同时，同名伴生高清封面、字幕/歌词（`.srt` / `.lrc`）、`[标题].md` 正文文案与 `[标题].info.json`（Schema 1.0 机器可读标准）。
 - **零虚假成功验收**：通过 `Verifier` 严格执行 `Content-Length` 比对与文件魔数深度校验（PDF EOF、EPUB 容器、图片 PIL 检验、MP4 atom 检验、防 403 HTML 陷阱）。
-- **音乐与音频全生态闭环**：
-  - **国内平台**：网易云音乐免费歌曲直链提取，VIP 独家歌曲采用 SpotDL 模式多源声学指纹精准匹配，同名伴生 `.lrc` 歌词与专辑图。
-  - **国外流媒体**：Spotify 与 Apple Music 原版 3000×3000px 视网膜封面 + 官方音轨对齐，输出标准 320kbps MP3。
-  - **开源音乐库**：Internet Archive Audio、Free Music Archive、SoundCloud 提取 CC/公共领域音频并沉淀开源 License。
-  - **私有“脏”格式一键解密**：支持网易云 `.ncm` 纯 Python 解密（AES-128+RC4 内存无损解壳），自动将 FLAC/APE/WAV 批量压制为标准 MP3。
-- **纯音频按需提取 (`-a / --audio`)**：音视频平台自动提取纯音频流（M4A/MP3），节省 80~90% 存储与带宽，专为 Agent 转写与人类收听设计。
-- **带密码压缩包智能解压 (`--unzip`)**：下载完成后自动提取分享口令中解析出的密码进行解压，自带 Zip-Slip 路径防逃逸保护与系统工具透明回退。
-- **批量全家桶支持 (`-i links.txt` 或多参数)**：一键批量并发提取多条资产，聚合报告成功率与标准 JSON 数组。
-- **静默原子闭环**：百度网盘与夸克网盘后台实现 `静默转存 ➔ 提取高速直链 ➔ 本地落盘 ➔ 自动销毁网盘临时副本`，云端零垃圾。
-- **双模输出**：人类模式（彩色进度条与状态卡片）vs. Agent 模式（`--json` 标准 stdout 输出）。
 
 ---
 
-## 2. Agent 启动规范：前置环境检查与小白依赖安装指引
+## 2. 依赖环境与小白自愈说明（关于环境是否必须带）
 
-当 Agent 在新环境中使用本 Skill 时，**必须优先执行环境健康自检**，并在必要时主动引导用户确认安装。
-
-### 步骤一：环境自检 (Pre-flight Doctor Check)
-
-执行诊断命令：
-```bash
-da doctor --json
-```
-
-核心检查清单：
-- **Python Runtime**：>= 3.10
-- **核心依赖包**：`requests`, `rich`, `click`, `pyyaml`, `beautifulsoup4`, `pillow`, `pypdf`, `cryptography`, `rookiepy`, `yt-dlp`
-- **系统辅助工具**：`curl` (底层网络兜底), `ffmpeg` (音视频无损提取与合并、MP3 压制)
-
-### 步骤二：发现依赖缺失时的主动交互引导
-
-如果发现核心依赖缺失（`all_required_ok == false`），**切勿直接报错崩溃**。Agent 应主动向用户说明：
-> "检测到使用 Download Anything 需要安装 Python 基础依赖（用于音视频解析、图片魔数检测与浏览器 Cookie 读取）。是否需要我为你一键安装？"
-
-并调用 `ask_question` 提供安装选项：
-1. `(Recommended) 自动帮我安装全部依赖 (uv pip install / pip)`
-2. `我稍后手动安装`
-
-### 步骤三：标准一键修复命令
-
-用户同意后，直接运行一键修复指令：
-```bash
-da doctor --fix
-# 或直接通过 uv / pip 安装
-uv pip install -e /Users/c.k/Documents/download-anything
-```
+> [!NOTE]
+> **运行环境必须打包附带吗？**
+> **完全不需要！** 
+> 1. 本工程在 Git 中已严格忽略 `.venv`，Skill 交付物仅为 pure-Python 代码（<1MB）。
+> 2. `da` 会直接检测用户系统现有的 Python 环境。若用户本机已有 `requests`, `rich` 等，直接就地运行，**不强占任何额外磁盘**。
+> 3. 若发现缺失依赖，通过 `da doctor --fix` 一键由 pip/uv 快速安装补齐。
 
 ---
 
-## 3. 智能落盘目录与文件命名规范
+## 3. 常用命令速查
 
-### 3.1 跨平台落盘目录优先级 (Directory Hierarchy)
-引擎采用成熟的智能分层决策，绝不胡乱建文件夹：
-1. **显式指定**：用户传入 `-o / --output-dir <path>` 优先使用指定路径。
-2. **工作区语义感知 (Workspace Sensing)**：
-   若当前运行在开发项目内（检测到 `.git`, `pyproject.toml`, `package.json` 等）：
-   - 自动嗅探工作区中已存在的微资产目录：`downloads/`、`data/`、`assets/`、`media/`。
-   - 优先直接落盘到项目既有的下载文件夹中！
-3. **系统原生下载目录回退 (OS Native Fallback)**：
-   脱离开发工作区时，自动落盘到系统官方下载目录：
-   - **macOS**: `~/Downloads/DownloadAnything/[YYYY-MM-DD]_[标题]/`
-   - **Windows**: `%USERPROFILE%\Downloads\DownloadAnything\[YYYY-MM-DD]_[标题]\`
-   - **Linux**: `$XDG_DOWNLOAD_DIR/DownloadAnything/[YYYY-MM-DD]_[标题]/`
-
-### 3.2 智能重命名规范
-拒绝把音频、视频或电子书保存为 `173829103948.mp4` 或 `content.mp3`：
-- **音乐音频**：`{歌名} - {歌手}.mp3`。
-- **高清封面**：`{歌名} - {歌手}.cover.jpg`。
-- **伴生歌词**：`{歌名} - {歌手}.lrc`。
-- **伴生字幕**：`{标题}.subtitle.srt`。
-- **双模元数据**：同目录下同时生成 `{标题}.info.json` 与 `content.info.json`，确保人类看文件名一目了然，Agent 自动化索引 100% 确定。
-
----
-
-## 4. Agent 常用调用方式
-
-### 4.1 音乐与音频提取（网易云、Spotify、Apple Music）
-
+### 3.1 基础与去重命令
 ```bash
-# 网易云音乐（支持分享文本与短链，自动下载 320k MP3 + 封面 + .lrc 歌词）
-da "https://music.163.com/#/song?id=33894312" --json
+# 1. 正常下载（自动索引并去重）
+da "https://b23.tv/BV1xx411c7m9"
 
-# Apple Music 专辑/单曲提取（自动升级 3000x3000px 巨幅封面）
-da "https://music.apple.com/us/album/after-hours/1499378108?i=1499378607" --json
-
-# Spotify 单曲提取
-da "https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b" --json
-
-# 本地加密 NCM 客户端缓存文件一键解密与 MP3 转换
-da "/path/to/favorite_track.ncm" --json
+# 2. 命中本地缓存后，如需强制重新下载：追加 -f
+da "https://b23.tv/BV1xx411c7m9" -f
 ```
 
-### 4.2 纯音频提取模式 (`-a / --audio`)
-
-对于长视频、访谈或演讲，如果用户仅需收听或输入给大模型做语音转写：
+### 3.2 协同云文档抓取（飞书公开文档、Notion 公开页）
 ```bash
-da "<视频URL>" -a --json
+# 抓取飞书公开云文档 / Wiki 并本地化插图产出 Markdown
+da "https://bytedance.feishu.cn/docx/doxcn12345678"
+
+# 抓取 Notion 公开页面并本地化图片
+da "https://username.notion.site/My-Public-Guide-123456"
 ```
-自动跳过视频高码率轨道，直接下载或无损转码为纯音频 `.m4a` / `.mp3`。
 
-### 4.3 批量全家桶下载 (`-i links.txt` 或多参数)
-
+### 3.3 知识库直通与双链闭环（Obsidian & Notion）
 ```bash
-# 从文本文件批量读取（每行一个链接或分享口令）
+# 下载的同时自动将 Markdown、封面与 frontmatter 写入指定 Obsidian 知识库
+da "https://music.163.com/#/song?id=33894312" --vault ~/Documents/Obsidian/Inbox
+
+# 推送资产记录至 Notion Database
+da "https://zhuanlan.zhihu.com/p/123456" --notion
+```
+
+### 3.4 纯音频与极速语音转写
+```bash
+# 提取音轨并直接通过云端 Whisper 转写为全文稿
+da "https://b23.tv/BV1xx411c7m9" -a --transcribe
+```
+
+### 3.5 批量全家桶与 Agent JSON
+```bash
 da -i links.txt --json
-
-# 或直接传入多个链接
-da "https://music.163.com/#/song?id=33894312" "com.termux" "10.1038/nature12373" --json
 ```
 
 ---
 
-## 5. 全平台驱动矩阵覆盖一览 (共 25 个专属驱动)
+## 4. 全平台驱动矩阵覆盖一览 (共 27 个专属驱动)
 
 | 资产分类 | 驱动名 | 支持特征与输入示例 | 交付产物与标准 |
 | :--- | :--- | :--- | :--- |
-| **音乐与音频** | `music_163` | `music.163.com/song?id=...`, `163cn.tv/...` | 320kbps MP3 + 原版封面图 + 逐句时间轴 `.lrc` 歌词，VIP 歌曲多源对齐 |
+| **协同文档与文章** | `feishu_doc` | `feishu.cn/docx/...`, `larksuite.com/wiki/...` | 剥离 Web App 骨架，本地化插图，产出纯净 GFM Markdown |
+| | `notion_public` | `notion.so/...`, `notion.site/...` | 提取 Notion 公开页面全文与插图，转为结构化 Markdown |
+| | `web_article` | 知乎、掘金、CSDN、Medium、Substack、博客园等 | 剥离防盗脚本与侧边广告，自动下载插图，产出 Markdown |
+| | `wechat` | `mp.weixin.qq.com/s/...` | 微信公众号正文纯净 Markdown + 图片本地化防外链失效 |
+| **音乐与解密** | `music_163` | `music.163.com/song?id=...`, `163cn.tv/...` | 320kbps MP3 + 原版封面图 + 逐句时间轴 `.lrc` 歌词 |
 | | `spotify_apple` | `open.spotify.com/track/...`, `music.apple.com/...` | SpotDL 架构：3000×3000 视网膜封面 + 官方音轨对齐 320kbps MP3 |
 | | `open_music` | `archive.org/details/...`, `soundcloud.com/...` | 公有领域/CC 授权 MP3 + 创作者版权声明 Markdown |
 | | `local_audio` | 本地 `.ncm`、`.flac`、`.ape`、`.wav` 文件路径 | 纯 Python 解密 NCM 容器，自动转码为标准 320k MP3 并抽取内嵌封面 |
@@ -149,8 +109,6 @@ da "https://music.163.com/#/song?id=33894312" "com.termux" "10.1038/nature12373"
 | | `shadow_library` | MD5 哈希、`annas-archive.*`, `libgen.*` | 全本中文出版书/网络小说/外文专著，国内镜像轮换加速 |
 | | `novel` | 笔趣阁/69书吧等小说目录页 | 自动解析目录、并发抓取章节、过滤广告并汇编为结构化小说 |
 | | `arxiv` | `arxiv.org/abs/...`, `arxiv.org/pdf/...` | 论文 PDF + 官方 BibTeX 伴生项 + `cn.arxiv.org` 国内镜像透明加速 |
-| **万能文章防盗** | `web_article` | 知乎、掘金、CSDN、Medium、Substack、博客园等 | 剥离防盗脚本与侧边广告，自动下载文章插图到本地，产出纯净 GFM Markdown |
-| | `wechat` | `mp.weixin.qq.com/s/...` | 微信公众号正文纯净 Markdown + 图片本地化防外链失效 |
-| **跨系统离线安装包** | `ms_store` | `apps.microsoft.com/detail/...` (微软商店链接/PID) | 提取官方原版受信任 `.msixbundle` / `.appxbundle` 离线安装包，附带 1 键 PowerShell 安装命令 |
+| **跨系统离线安装包**| `ms_store` | `apps.microsoft.com/detail/...` (微软商店链接/PID) | 提取官方原版受信任 `.msixbundle` / `.appxbundle` 离线安装包，附带 1 键 PowerShell 安装命令 |
 | | `android_apk` | `com.termux`, `play.google.com/...`, `org.videolan.vlc` | 免 Google Play 登录，从 F-Droid 与官方镜像提取官方 `.apk`，附带 ADB 安装指令 |
 | **代码与开发** | `github` | `github.com/{owner}/{repo}/(tree\|blob)/...` | 单目录/单文件精准抓取，免全量 `git clone`，附带 `gh-proxy` 国内镜像 |
