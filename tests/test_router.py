@@ -57,6 +57,27 @@ def test_annas_archive_url(router):
     assert driver.name == "shadow_library"
     assert cleaned.url == url
 
+def test_shadow_library_book_title_and_prefixes(router):
+    # 1. Plain book title
+    driver, cleaned = router.route("三体")
+    assert driver.name == "shadow_library"
+    assert cleaned.url == "三体"
+
+    # 2. Book prefix
+    driver, cleaned = router.route("book:哲学谈话录")
+    assert driver.name == "shadow_library"
+    assert cleaned.url == "book:哲学谈话录"
+
+    # 3. ISBN prefix
+    driver, cleaned = router.route("isbn:9787536692930")
+    assert driver.name == "shadow_library"
+    assert cleaned.url == "book:9787536692930"
+
+    # 4. English title
+    driver, cleaned = router.route("Thinking, Fast and Slow")
+    assert driver.name == "shadow_library"
+    assert cleaned.url == "Thinking, Fast and Slow"
+
 def test_unsupported_url(router):
     with pytest.raises(UrlNotSupportedError):
         router.route("https://unsupported-unknown-domain-xyz.com/file")

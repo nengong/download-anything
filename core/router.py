@@ -75,6 +75,17 @@ class Router:
                 extra_params={"md5": md5_hash}
             )
 
+        # 4. Check for explicit book/isbn search prefix
+        book_match = re.match(r"^(?:book|isbn|libgen|annas?)[：:\s]+(.+)$", text, re.IGNORECASE)
+        if book_match:
+            book_query = book_match.group(1).strip()
+            return CleanInput(
+                url=f"book:{book_query}",
+                password=found_pwd,
+                original_text=raw_text,
+                extra_params={"book_query": book_query}
+            )
+
         # Fallback to the raw string if no URL regex matched
         return CleanInput(
             url=text,

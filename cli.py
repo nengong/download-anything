@@ -19,11 +19,11 @@ from rich.panel import Panel
 from rich.progress import Progress, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn, TextColumn
 from rich.table import Table
 
-from core.exceptions import DAError
+from core.exceptions import DAError, VerificationError
 from core.fetcher import Fetcher, FetcherOptions
 from core.router import Router
 from core.sidecar import SidecarWriter
-from core.verifier import Verifier
+from core.verifier import Verifier, detect_audio_container
 from core.unpacker import Unpacker
 from core.index_db import AssetIndexDB
 from core.vault_sync import VaultSync
@@ -82,7 +82,8 @@ def process_download(
     force: bool = False,
     vault: Optional[str] = None,
     notion: bool = False,
-    transcribe: bool = False
+    transcribe: bool = False,
+    lang: Optional[str] = None
 ) -> Dict[str, Any]:
     """Core download pipeline for a single target."""
     router = Router(get_default_drivers())
@@ -112,7 +113,8 @@ def process_download(
                 ))
             return cached
 
-    driver, clean_input = router.route(target_text, explicit_password=password)
+    driver = router.find_driver(prelim_clean)
+    clean_input = prelim_clean
 
     if not agent_mode and verbose:
         console.print(f"[dim][*] Detected Driver: [bold]{driver.name}[/bold] ({driver.category})[/dim]")
@@ -120,302 +122,344 @@ def process_download(
         if clean_input.password:
             console.print(f"[dim][*] Passcode: {clean_input.password}[/dim]")
 
-    # Extract assets with optional audio_only hint
-    package = driver.extract(clean_input.url, password=clean_input.password, audio_only=audio_only)
-    primary_asset = package.primary_asset
-    if not primary_asset:
-        raise DAError("Driver extracted 0 assets from target.")
-
-    # Dry-run inspection
-    if check:
-        return {
-            "status": "dry_run",
-            "platform": package.platform,
-            "title": package.title,
-            "primary_asset": {
-                "filename": primary_asset.filename,
-                "url": primary_asset.url,
-                "expected_size": primary_asset.expected_size,
-                "file_type": primary_asset.file_type
-            },
-            "total_assets": len(package.assets),
-            "metadata": package.metadata
-        }
-
-    # Resolve output directory
-    base_dir = resolve_output_directory(output_dir, title=package.title, create_subfolder=True)
-    base_dir.mkdir(parents=True, exist_ok=True)
-
-    # Smart file naming
-    clean_title = sanitize_filename(package.title, max_length=70)
-    raw_ext = Path(primary_asset.filename).suffix
-    if not raw_ext:
-        raw_ext = ".m4a" if audio_only else ".mp4"
-
-    is_generic_name = (
-        primary_asset.filename.startswith("content.") or 
-        primary_asset.filename.startswith("article.") or
-        primary_asset.filename.startswith("video.") or
-        (len(primary_asset.filename) > 0 and primary_asset.filename[0].isdigit())
+    # Extract assets with optional audio_only hint and preferred language
+    package = driver.extract(
+        clean_input.url,
+        password=clean_input.password,
+        audio_only=audio_only,
+        inspect_only=check,
+        preferred_lang=lang,
+        lang=lang
     )
-    if is_generic_name and clean_title and clean_title != "untitled_asset":
-        primary_asset.filename = f"{clean_title}{raw_ext}"
+    warnings = []
+    operations = {}
+    result = None
+    try:
+        primary_asset = package.primary_asset
+        if not primary_asset:
+            raise DAError("Driver extracted 0 assets from target.")
 
-    fetcher = Fetcher(FetcherOptions(
-        max_bytes=max_mb * 1024 * 1024,
-        chunk_size=65536,
-        inactivity_timeout=45
-    ))
+        # Dry-run inspection
+        if check:
+            return {
+                "status": "dry_run",
+                "platform": package.platform,
+                "title": package.title,
+                "primary_asset": {
+                    "filename": primary_asset.filename,
+                    "url": primary_asset.url,
+                    "expected_size": primary_asset.expected_size,
+                    "file_type": primary_asset.file_type
+                },
+                "total_assets": len(package.assets),
+                "metadata": package.metadata
+            }
 
-    dest_file = resolve_asset_path(base_dir, primary_asset.filename)
-    primary_asset.filename = str(dest_file.relative_to(base_dir.resolve()))
+        # Resolve output directory
+        base_dir = resolve_output_directory(output_dir, title=package.title, create_subfolder=True)
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-    # Fetch Primary Asset
-    if not agent_mode:
-        with Progress(
-            TextColumn("[bold blue]{task.fields[filename]}", justify="left"),
-            BarColumn(bar_width=40),
-            "[progress.percentage]{task.percentage:>3.1f}%",
-            "•",
-            DownloadColumn(),
-            "•",
-            TransferSpeedColumn(),
-            "•",
-            TimeRemainingColumn(),
-            console=console
-        ) as progress:
-            task_id = progress.add_task(
-                "download",
-                filename=primary_asset.filename,
-                total=primary_asset.expected_size or 0
-            )
+        # Smart file naming
+        clean_title = sanitize_filename(package.title, max_length=70)
+        raw_ext = Path(primary_asset.filename).suffix
+        if not raw_ext:
+            raw_ext = ".m4a" if audio_only else ".mp4"
 
-            def update_progress(current, total):
-                if total and progress.tasks[task_id].total != total:
-                    progress.update(task_id, total=total)
-                progress.update(task_id, completed=current)
+        is_generic_name = (
+            primary_asset.filename.startswith("content.") or
+            primary_asset.filename.startswith("article.") or
+            primary_asset.filename.startswith("video.") or
+            (len(primary_asset.filename) > 0 and primary_asset.filename[0].isdigit())
+        )
+        if is_generic_name and clean_title and clean_title != "untitled_asset":
+            primary_asset.filename = f"{clean_title}{raw_ext}"
 
+        fetcher = Fetcher(FetcherOptions(
+            max_bytes=max_mb * 1024 * 1024,
+            chunk_size=65536,
+            inactivity_timeout=45
+        ))
+
+        dest_file = resolve_asset_path(base_dir, primary_asset.filename)
+        primary_asset.filename = str(dest_file.relative_to(base_dir.resolve()))
+
+        # Fetch Primary Asset
+        if not agent_mode:
+            with Progress(
+                TextColumn("[bold blue]{task.fields[filename]}", justify="left"),
+                BarColumn(bar_width=40),
+                "[progress.percentage]{task.percentage:>3.1f}%",
+                "•",
+                DownloadColumn(),
+                "•",
+                TransferSpeedColumn(),
+                "•",
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                task_id = progress.add_task(
+                    "download",
+                    filename=primary_asset.filename,
+                    total=primary_asset.expected_size or 0
+                )
+
+                def update_progress(current, total):
+                    if total and progress.tasks[task_id].total != total:
+                        progress.update(task_id, total=total)
+                    progress.update(task_id, completed=current)
+
+                downloaded_size = fetcher.download(
+                    url=primary_asset.url,
+                    dest_path=dest_file,
+                    headers=primary_asset.headers,
+                    expected_size=primary_asset.expected_size,
+                    progress_callback=update_progress
+                )
+        else:
             downloaded_size = fetcher.download(
                 url=primary_asset.url,
                 dest_path=dest_file,
                 headers=primary_asset.headers,
-                expected_size=primary_asset.expected_size,
-                progress_callback=update_progress
-            )
-    else:
-        downloaded_size = fetcher.download(
-            url=primary_asset.url,
-            dest_path=dest_file,
-            headers=primary_asset.headers,
-            expected_size=primary_asset.expected_size
-        )
-
-    primary_asset.local_path = dest_file
-    primary_asset.downloaded_bytes = downloaded_size
-
-    # Fetch Companions (Cover, Subtitles, etc.)
-    cover_filename = None
-    subtitle_filename = None
-    for companion in package.assets:
-        if companion.file_type == "primary":
-            continue
-        comp_ext = Path(companion.filename).suffix
-        if companion.file_type == "cover":
-            companion.filename = f"{clean_title}.cover{comp_ext or '.jpg'}" if clean_title != "untitled_asset" else "cover.jpg"
-            cover_filename = companion.filename
-        elif companion.file_type == "subtitle":
-            companion.filename = f"{clean_title}.subtitle{comp_ext or '.srt'}" if clean_title != "untitled_asset" else "subtitle.srt"
-            subtitle_filename = companion.filename
-
-        comp_dest = resolve_asset_path(base_dir, companion.filename)
-        companion.filename = str(comp_dest.relative_to(base_dir.resolve()))
-        try:
-            fetcher.download(
-                url=companion.url,
-                dest_path=comp_dest,
-                headers=companion.headers,
-                expected_size=companion.expected_size
-            )
-            companion.local_path = comp_dest
-        except Exception as e:
-            if verbose and not agent_mode:
-                console.print(f"[dim yellow]Warning: Failed to fetch companion {companion.filename}: {e}[/dim yellow]")
-
-    # Audio-only post-processing if primary asset is a video
-    if audio_only and dest_file.suffix.lower() in VIDEO_EXTENSIONS:
-        if not agent_mode:
-            console.print("[dim cyan]🎵 提取纯音频流中 (FFmpeg)...[/dim cyan]")
-        extracted_audio = _extract_audio_from_video(dest_file)
-        if extracted_audio and extracted_audio.exists():
-            dest_file = extracted_audio
-            primary_asset.filename = dest_file.name
-            primary_asset.local_path = dest_file
-            downloaded_size = dest_file.stat().st_size
-            primary_asset.downloaded_bytes = downloaded_size
-        else:
-            raise DAError(
-                f"Audio extraction failed for {primary_asset.filename}; "
-                "the original video was preserved. Check ffmpeg availability and the source audio track."
+                expected_size=primary_asset.expected_size
             )
 
-    # Normalize non-MP3 audio streams saved with an .mp3 suffix.
-    expected_verify_size = primary_asset.expected_size if not audio_only else None
-    if dest_file.suffix.lower() == ".mp3" and dest_file.exists() and dest_file.stat().st_size > 16:
-        with open(dest_file, "rb") as f_head:
-            h16 = f_head.read(16)
-        is_native_mp3 = h16.startswith(b"ID3") or (len(h16) >= 2 and h16[0] == 0xFF and (h16[1] & 0xE0) == 0xE0)
-        container_ext = None
-        if h16.startswith(b"\x1a\x45\xdf\xa3"):
-            container_ext = ".webm"
-        elif len(h16) >= 8 and h16[4:8] == b"ftyp":
-            container_ext = ".m4a"
-        elif h16.startswith(b"OggS"):
-            container_ext = ".ogg"
-        elif h16.startswith(b"fLaC"):
-            container_ext = ".flac"
-        elif h16.startswith(b"RIFF") and b"WAVE" in h16[:16]:
-            container_ext = ".wav"
+        primary_asset.local_path = dest_file
+        primary_asset.downloaded_bytes = downloaded_size
 
-        if not is_native_mp3 and container_ext:
-            tmp_raw = dest_file.with_suffix(".raw_audio")
-            dest_file.replace(tmp_raw)
-            cover_p = (base_dir / cover_filename) if cover_filename and (base_dir / cover_filename).exists() else None
-            if MusicUnlocker.transcode_to_mp3(tmp_raw, dest_file, cover_path=cover_p, metadata={"title": package.title}):
-                tmp_raw.unlink(missing_ok=True)
-                downloaded_size = dest_file.stat().st_size
-                primary_asset.downloaded_bytes = downloaded_size
-                expected_verify_size = None
-            else:
-                # Preserve a playable asset with its real extension instead of mislabeling it as MP3.
-                dest_file.unlink(missing_ok=True)
-                dest_file = dest_file.with_suffix(container_ext)
-                tmp_raw.replace(dest_file)
+        # Fetch Companions (Cover, Subtitles, Extra Images, BibTeX, etc.)
+        cover_filename = None
+        subtitle_filename = None
+        companion_files: List[str] = []
+        for companion in package.assets:
+            if companion is primary_asset or companion.file_type == "primary":
+                continue
+            comp_ext = Path(companion.filename).suffix
+            if companion.file_type == "cover":
+                companion.filename = f"{clean_title}.cover{comp_ext or '.jpg'}" if clean_title != "untitled_asset" else "cover.jpg"
+                cover_filename = companion.filename
+            elif companion.file_type == "subtitle":
+                companion.filename = f"{clean_title}.subtitle{comp_ext or '.srt'}" if clean_title != "untitled_asset" else "subtitle.srt"
+                subtitle_filename = companion.filename
+
+            comp_dest = resolve_asset_path(base_dir, companion.filename)
+            companion.filename = str(comp_dest.relative_to(base_dir.resolve()))
+            try:
+                fetcher.download(
+                    url=companion.url,
+                    dest_path=comp_dest,
+                    headers=companion.headers,
+                    expected_size=companion.expected_size
+                )
+                companion_verification = Verifier.verify(comp_dest, expected_size=companion.expected_size)
+                if not companion_verification.valid:
+                    raise VerificationError(companion_verification.error_message)
+                companion.local_path = comp_dest
+                if companion.file_type not in ("cover", "subtitle") and comp_dest.exists():
+                    companion_files.append(str(comp_dest.resolve()))
+            except Exception as e:
+                warnings.append({"stage": "companion", "asset": companion.filename,
+                                 "error_type": type(e).__name__, "message": str(e)})
+                if companion.file_type == "cover":
+                    cover_filename = None
+                elif companion.file_type == "subtitle":
+                    subtitle_filename = None
+                if verbose and not agent_mode:
+                    console.print(f"[dim yellow]Warning: Failed to fetch companion {companion.filename}: {e}[/dim yellow]")
+
+        # Audio-only post-processing if primary asset is a video
+        if audio_only and dest_file.suffix.lower() in VIDEO_EXTENSIONS:
+            if not agent_mode:
+                console.print("[dim cyan]🎵 提取纯音频流中 (FFmpeg)...[/dim cyan]")
+            extracted_audio = _extract_audio_from_video(dest_file)
+            if extracted_audio and extracted_audio.exists():
+                dest_file = extracted_audio
                 primary_asset.filename = dest_file.name
                 primary_asset.local_path = dest_file
+                downloaded_size = dest_file.stat().st_size
+                primary_asset.downloaded_bytes = downloaded_size
+            else:
+                raise DAError(
+                    f"Audio extraction failed for {primary_asset.filename}; "
+                    "the original video was preserved. Check ffmpeg availability and the source audio track."
+                )
 
-    # Rigorous Verification
-    verification = Verifier.verify(
-        dest_file,
-        expected_size=expected_verify_size,
-        expected_ext=dest_file.suffix
-    )
+        # Normalize non-MP3 audio streams saved with an .mp3 suffix.
+        expected_verify_size = primary_asset.expected_size if not audio_only else None
+        if dest_file.suffix.lower() == ".mp3" and dest_file.exists() and dest_file.stat().st_size > 16:
+            with open(dest_file, "rb") as f_head:
+                h16 = f_head.read(16)
+            container = detect_audio_container(h16)
+            if container and container != "mp3":
+                tmp_raw = dest_file.with_suffix(".raw_audio")
+                dest_file.replace(tmp_raw)
+                cover_p = (base_dir / cover_filename) if cover_filename and (base_dir / cover_filename).exists() else None
+                if MusicUnlocker.transcode_to_mp3(tmp_raw, dest_file, cover_path=cover_p, metadata={"title": package.title}):
+                    tmp_raw.unlink(missing_ok=True)
+                    downloaded_size = dest_file.stat().st_size
+                    primary_asset.downloaded_bytes = downloaded_size
+                    expected_verify_size = None
+                else:
+                    # Preserve a playable asset with its real extension instead of mislabeling it as MP3.
+                    dest_file.unlink(missing_ok=True)
+                    dest_file = dest_file.with_suffix(f".{container}")
+                    tmp_raw.replace(dest_file)
+                    primary_asset.filename = dest_file.name
+                    primary_asset.local_path = dest_file
 
-    if not verification.valid:
-        raise DAError(
-            f"Verification failed for {primary_asset.filename}: {verification.error_message}",
-            details={"verification": verification.__dict__}
+        # Rigorous Verification
+        verification = Verifier.verify(
+            dest_file,
+            expected_size=expected_verify_size,
+            expected_ext=dest_file.suffix
         )
 
-    primary_asset.verified = True
+        if not verification.valid:
+            raise VerificationError(
+                f"Verification failed for {primary_asset.filename}: {verification.error_message}",
+                details={"verification": verification.__dict__}
+            )
 
-    # Automatic Archive Unpacking (with auto password support)
-    extracted_files = []
-    if auto_unzip and Unpacker.is_archive(dest_file):
-        if not agent_mode:
-            console.print(f"[dim cyan]📦 检测到压缩归档，正在自动解压提取 (密码: {clean_input.password or '无'})...[/dim cyan]")
-        extract_dest = base_dir / f"extracted_{clean_title}"
-        extracted_files = Unpacker.unpack(
-            archive_path=dest_file,
-            dest_dir=extract_dest,
-            password=clean_input.password
-        )
-        if extracted_files:
-            package.metadata["extracted_files"] = [str(f.name) for f in extracted_files]
-            package.metadata["extracted_count"] = len(extracted_files)
+        primary_asset.verified = True
 
-    # Sidecar Generation
-    sidecar_paths = {}
-    if not no_sidecar:
-        sidecar_paths = SidecarWriter.write_sidecars(
-            dest_dir=base_dir,
-            package=package,
-            primary_filename=primary_asset.filename,
-            cover_filename=cover_filename,
-            subtitle_filename=subtitle_filename
-        )
-
-    # Post-download Cleanup Hook (Zero-trace cloud deletion)
-    try:
-        driver.cleanup(package)
-    except Exception as e:
-        if verbose and not agent_mode:
-            console.print(f"[dim yellow]Warning: Cleanup hook failed: {e}[/dim yellow]")
-
-    sidecar_dict = {k: str(v.resolve()) for k, v in sidecar_paths.items()}
-    if cover_filename and (base_dir / cover_filename).exists():
-        sidecar_dict["cover"] = str((base_dir / cover_filename).resolve())
-    if subtitle_filename and (base_dir / subtitle_filename).exists():
-        sidecar_dict["subtitle"] = str((base_dir / subtitle_filename).resolve())
-
-    # 10. Cloud Speech Transcription Hook (Whisper API without local heavy models)
-    if transcribe and (audio_only or dest_file.suffix.lower() in {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"}):
-        if not agent_mode:
-            console.print("[dim cyan]🎙️ 正在调用轻量云端 Whisper 极速转写生成全文稿...[/dim cyan]")
-        transcript_file = CloudTranscriber.transcribe(dest_file, base_dir, clean_title)
-        if transcript_file:
-            sidecar_dict["transcript"] = str(transcript_file.resolve())
+        # Automatic Archive Unpacking (with auto password support)
+        extracted_files = []
+        if auto_unzip and Unpacker.is_archive(dest_file):
             if not agent_mode:
-                console.print(f"[bold green]✔ [语音文字稿就绪][/bold green] {transcript_file.name}")
-        elif not agent_mode:
-            console.print("[dim yellow]💡 语音转写提示: 未检测到 GROQ_API_KEY 或 OPENAI_API_KEY 环境变量，已跳过转写。[/dim yellow]")
+                console.print(f"[dim cyan]📦 检测到压缩归档，正在自动解压提取 (密码: {clean_input.password or '无'})...[/dim cyan]")
+            extract_dest = base_dir / f"extracted_{clean_title}"
+            extracted_files = Unpacker.unpack(
+                archive_path=dest_file,
+                dest_dir=extract_dest,
+                password=clean_input.password
+            )
+            if extracted_files:
+                package.metadata["extracted_files"] = [str(f.name) for f in extracted_files]
+                package.metadata["extracted_count"] = len(extracted_files)
 
-    # 11. Downstream Personal Knowledge-Base Sync (Obsidian & Notion)
-    obsidian_note = None
-    if vault or os.getenv("OBSIDIAN_VAULT_PATH") or os.getenv("DA_VAULT_PATH"):
-        obsidian_note = VaultSync.sync_to_obsidian(
-            asset_dir=base_dir,
-            vault_path=vault,
-            title=package.title,
-            platform=package.platform,
-            original_url=clean_input.url
-        )
-        if obsidian_note:
-            sidecar_dict["obsidian_vault_note"] = str(obsidian_note.resolve())
+        # Sidecar Generation
+        sidecar_paths = {}
+        if not no_sidecar:
+            sidecar_paths = SidecarWriter.write_sidecars(
+                dest_dir=base_dir,
+                package=package,
+                primary_filename=primary_asset.filename,
+                cover_filename=cover_filename,
+                subtitle_filename=subtitle_filename
+            )
+
+        sidecar_dict: Dict[str, Any] = {k: str(v.resolve()) for k, v in sidecar_paths.items()}
+        if cover_filename and (base_dir / cover_filename).exists():
+            sidecar_dict["cover"] = str((base_dir / cover_filename).resolve())
+        if subtitle_filename and (base_dir / subtitle_filename).exists():
+            sidecar_dict["subtitle"] = str((base_dir / subtitle_filename).resolve())
+        if companion_files:
+            sidecar_dict["companion_files"] = companion_files
+
+        # 10. Cloud Speech Transcription Hook (Whisper API without local heavy models)
+        if transcribe and (audio_only or dest_file.suffix.lower() in {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"}):
             if not agent_mode:
-                console.print(f"[bold green]✔ [Obsidian 双链库同步成功][/bold green] {obsidian_note}")
+                console.print("[dim cyan]🎙️ 正在调用轻量云端 Whisper 极速转写生成全文稿...[/dim cyan]")
+            try:
+                transcript_file = CloudTranscriber.transcribe(dest_file, base_dir, clean_title)
+            except Exception as exc:
+                transcript_file = None
+                operations["transcription"] = {"status": "error", "reason": str(exc)}
+            if transcript_file:
+                operations["transcription"] = {"status": "success"}
+                sidecar_dict["transcript"] = str(transcript_file.resolve())
+                if not agent_mode:
+                    console.print(f"[bold green]✔ [语音文字稿就绪][/bold green] {transcript_file.name}")
+            else:
+                operations.setdefault("transcription", {"status": "error", "reason": "Transcription produced no result"})
+                warnings.append({"stage": "transcription", "message": operations["transcription"]["reason"]})
+        elif transcribe:
+            operations["transcription"] = {"status": "skipped", "reason": "Use -a to extract an audio track before transcription"}
+            warnings.append({"stage": "transcription", "message": operations["transcription"]["reason"]})
 
-    if notion:
-        notion_res = VaultSync.sync_to_notion(
-            title=package.title,
-            markdown_body=package.metadata.get("sidecar_text", ""),
-            platform=package.platform,
-            original_url=clean_input.url,
-            cover_url=package.assets[1].url if len(package.assets) > 1 else None
-        )
-        if notion_res.get("success"):
-            sidecar_dict["notion_page"] = notion_res.get("notion_page_url", "pushed")
-            if not agent_mode:
-                console.print(f"[bold green]✔ [Notion 页面推送成功][/bold green] {notion_res.get('notion_page_url')}")
-        elif not agent_mode:
-            console.print(f"[dim yellow]💡 Notion 提示: {notion_res.get('reason')}[/dim yellow]")
+        # 11. Downstream Personal Knowledge-Base Sync (Obsidian & Notion)
+        obsidian_note = None
+        if vault or os.getenv("OBSIDIAN_VAULT_PATH") or os.getenv("DA_VAULT_PATH"):
+            try:
+                obsidian_note = VaultSync.sync_to_obsidian(
+                    asset_dir=base_dir,
+                    vault_path=vault,
+                    title=package.title,
+                    platform=package.platform,
+                    original_url=clean_input.url
+                )
+            except Exception as exc:
+                obsidian_note = None
+                operations["obsidian"] = {"status": "error", "reason": str(exc)}
+            if obsidian_note:
+                operations["obsidian"] = {"status": "success"}
+                sidecar_dict["obsidian_vault_note"] = str(obsidian_note.resolve())
+                if not agent_mode:
+                    console.print(f"[bold green]✔ [Obsidian 双链库同步成功][/bold green] {obsidian_note}")
+            else:
+                operations.setdefault("obsidian", {"status": "error", "reason": "Obsidian vault could not be resolved"})
+                warnings.append({"stage": "obsidian", "message": operations["obsidian"]["reason"]})
 
-    # 12. Record in Local Asset Index DB for Deduplication
-    AssetIndexDB.record(
-        url=clean_input.url,
-        platform=package.platform,
-        title=package.title,
-        output_dir=base_dir,
-        primary_file=dest_file,
-        size_bytes=downloaded_size,
-        sidecars=sidecar_dict,
-        variant=cache_variant,
-    )
+        if notion:
+            try:
+                notion_res = VaultSync.sync_to_notion(
+                    title=package.title,
+                    markdown_body=package.raw_markdown or package.metadata.get("sidecar_text", "") or package.metadata.get("description", ""),
+                    platform=package.platform,
+                    original_url=clean_input.url,
+                    cover_url=package.assets[1].url if len(package.assets) > 1 else None
+                )
+            except Exception as exc:
+                notion_res = {"success": False, "reason": str(exc)}
+                operations["notion"] = {"status": "error", "reason": str(exc)}
+            if notion_res.get("success"):
+                operations["notion"] = {"status": "success"}
+                sidecar_dict["notion_page"] = notion_res.get("notion_page_url", "pushed")
+                if not agent_mode:
+                    console.print(f"[bold green]✔ [Notion 页面推送成功][/bold green] {notion_res.get('notion_page_url')}")
+            else:
+                operations["notion"] = {"status": "error", "reason": notion_res.get("reason", "Notion sync failed")}
+                warnings.append({"stage": "notion", "message": operations["notion"]["reason"]})
 
-    return {
-        "status": "success",
-        "platform": package.platform,
-        "title": package.title,
-        "output_dir": str(base_dir.resolve()),
-        "primary_asset": str(dest_file.resolve()),
-        "size_bytes": downloaded_size,
-        "sidecars": sidecar_dict,
-        "extracted_files": [str(p.resolve()) for p in extracted_files] if extracted_files else [],
-        "verification": {
-            "valid": verification.valid,
-            "detected_type": verification.detected_type,
-            "details": verification.details
+        result = {
+            "status": "partial" if warnings else "success",
+            "platform": package.platform,
+            "title": package.title,
+            "output_dir": str(base_dir.resolve()),
+            "primary_asset": str(dest_file.resolve()),
+            "size_bytes": downloaded_size,
+            "sidecars": sidecar_dict,
+            "companion_files": companion_files,
+            "extracted_files": [str(p.resolve()) for p in extracted_files] if extracted_files else [],
+            "verification": {
+                "valid": verification.valid,
+                "detected_type": verification.detected_type,
+                "details": verification.details
+            },
+            "warnings": warnings,
+            "operations": operations,
         }
-    }
+        return result
+    finally:
+        if not check:
+            active_error = sys.exc_info()[1]
+            try:
+                driver.cleanup(package)
+                operations["cleanup"] = {"status": "success"}
+            except Exception as exc:
+                operations["cleanup"] = {"status": "error", "reason": str(exc)}
+                warnings.append({"stage": "cleanup", "message": str(exc)})
+                if result is not None:
+                    result["status"] = "partial"
+                if active_error is not None:
+                    details = dict(getattr(active_error, "details", {}) or {})
+                    details["cleanup_error"] = str(exc)
+                    active_error.details = details
+            if result is not None and result["status"] == "success":
+                AssetIndexDB.record(
+                    url=clean_input.url, platform=package.platform, title=package.title,
+                    output_dir=base_dir, primary_file=dest_file, size_bytes=downloaded_size,
+                    sidecars=sidecar_dict, variant=cache_variant,
+                )
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -429,9 +473,10 @@ def process_download(
 @click.option("--notion", is_flag=True, help="Sync note record to Notion database (requires NOTION_API_KEY)")
 @click.option("--transcribe", is_flag=True, help="Transcribe speech/podcast audio using ultra-light cloud Whisper API")
 @click.option("--unzip/--no-unzip", default=True, help="Automatically extract password-protected or standard archives upon download (default: True)")
-@click.option("--max-mb", default=500, type=int, help="Maximum allowed file size in MB (default: 500)")
+@click.option("--max-mb", default=500, type=click.IntRange(min=1), help="Maximum allowed file size in MB (default: 500)")
 @click.option("--check", is_flag=True, help="Dry run: inspect and extract metadata without downloading")
 @click.option("--no-sidecar", is_flag=True, help="Disable generating sidecar metadata (.info.json and .md)")
+@click.option("--lang", default=None, help="Preferred language for search & extraction (e.g. 'zh', 'en'). Follows user conversation language.")
 @click.option("--fix", is_flag=True, help="Auto-repair and install missing dependencies in doctor mode")
 @click.option("--json", "agent_mode", is_flag=True, help="Agent mode: output JSON result to stdout")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logs")
@@ -449,6 +494,7 @@ def main(
     max_mb: int,
     check: bool,
     no_sidecar: bool,
+    lang: Optional[str],
     fix: bool,
     agent_mode: bool,
     verbose: bool
@@ -496,7 +542,11 @@ def main(
 
     if not targets_list:
         if agent_mode:
-            print(json.dumps({"status": "error", "message": "No target URL, text, or input file provided"}, ensure_ascii=False))
+            print(json.dumps({
+                "status": "error",
+                "error_type": "InvalidInputError",
+                "message": "No target URL, text, or input file provided"
+            }, ensure_ascii=False, indent=2))
             sys.exit(1)
         console.print("[bold red]Error:[/bold red] Please provide a target URL, share text, or batch file (-i).")
         console.print("Usage: [bold green]da \"<URL or share text>\"[/bold green] or [bold green]da -i links.txt[/bold green]")
@@ -528,7 +578,8 @@ def main(
                 force=force,
                 vault=vault,
                 notion=notion,
-                transcribe=transcribe
+                transcribe=transcribe,
+                lang=lang
             )
         except Exception as e:
             _handle_error(e, agent_mode)
@@ -558,14 +609,17 @@ def main(
 
             console.print(Panel(
                 success_table,
-                title="[bold green]Download Complete & Verified[/bold green]",
-                border_style="green"
+                title="Download Partially Complete" if res["status"] == "partial" else "Download Complete & Verified",
+                border_style="yellow" if res["status"] == "partial" else "green"
             ))
-        sys.exit(0)
+            for warning in res.get("warnings", []):
+                err_console.print(f"[yellow]{warning['stage']}: {warning['message']}[/yellow]")
+        sys.exit(2 if res["status"] == "partial" else 0)
 
     # Batch Download Flow (Multiple Targets)
     results = []
     success_count = 0
+    partial_count = 0
     total = len(targets_list)
 
     for idx, target in enumerate(targets_list, 1):
@@ -586,13 +640,17 @@ def main(
                 force=force,
                 vault=vault,
                 notion=notion,
-                transcribe=transcribe
+                transcribe=transcribe,
+                lang=lang
             )
             item_res["target"] = target
             results.append(item_res)
-            success_count += 1
+            if item_res["status"] == "partial":
+                partial_count += 1
+            else:
+                success_count += 1
             if not agent_mode:
-                console.print(f"[bold green]✔ [{idx}/{total}] Success:[/bold green] {item_res.get('title', 'Done')}")
+                console.print(f"[{idx}/{total}] {item_res['status']}: {item_res.get('title', 'Done')}")
         except Exception as e:
             err_dict = {
                 "status": "error",
@@ -600,6 +658,8 @@ def main(
                 "error_type": type(e).__name__,
                 "message": str(e)
             }
+            if getattr(e, "details", None):
+                err_dict["details"] = e.details
             results.append(err_dict)
             if not agent_mode:
                 console.print(f"[bold red]✘ [{idx}/{total}] Failed:[/bold red] {e}")
@@ -609,6 +669,7 @@ def main(
             "batch": True,
             "total": total,
             "success_count": success_count,
+            "partial_count": partial_count,
             "results": results
         }
         print(json.dumps(batch_output, ensure_ascii=False, indent=2))
@@ -620,13 +681,16 @@ def main(
         summary_table.add_column("Details")
 
         for idx, r in enumerate(results, 1):
-            if r.get("status") == "success":
+            if r.get("status") in ("success", "cached", "dry_run"):
                 summary_table.add_row(
                     str(idx),
                     "[bold green]✔ OK[/bold green]",
                     r.get("title") or r.get("target") or "N/A",
                     f"{r.get('size_bytes', 0)/(1024*1024):.2f} MB"
                 )
+            elif r.get("status") == "partial":
+                summary_table.add_row(str(idx), "[yellow]Partial[/yellow]", r.get("title", ""),
+                                      "; ".join(w["message"] for w in r.get("warnings", [])))
             else:
                 summary_table.add_row(
                     str(idx),
@@ -636,7 +700,30 @@ def main(
                 )
         console.print(summary_table)
 
-    sys.exit(0 if success_count > 0 else 1)
+    sys.exit(2 if partial_count else (0 if success_count > 0 else 1))
+
+
+def _report_login_result(
+    platform: str,
+    agent_mode: bool,
+    success: bool,
+    message: str,
+    human_message: Any,
+    source: Optional[str] = None,
+) -> bool:
+    """Build and emit one login result while preserving the process exit semantics."""
+    result: Dict[str, Any] = {
+        "status": "success" if success else "error",
+        "platform": platform,
+    }
+    if source:
+        result["source"] = source
+    result["message"] = message
+    if agent_mode:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        console.print(human_message)
+    return success
 
 
 def _handle_login(platform: str, agent_mode: bool = False) -> bool:
@@ -656,28 +743,34 @@ def _handle_login(platform: str, agent_mode: bool = False) -> bool:
     cookie = credentials_manager._harvest_from_browsers(domains)
     if cookie:
         credentials_manager.save_credential(platform, cookie)
-        if agent_mode:
-            print(json.dumps({"status": "success", "platform": platform, "source": "browser", "message": "Cookie harvested from default browser and saved"}, ensure_ascii=False, indent=2))
-        else:
-            console.print(Panel(
+        return _report_login_result(
+            platform,
+            agent_mode,
+            True,
+            "Cookie harvested from default browser and saved",
+            Panel(
                 f"[bold green]✔ 成功直接从默认浏览器中捕获到 {platform} 的登录 Cookie！已自动保存。[/bold green]\n"
                 "[dim]现在直接运行 da \"<网盘链接>\" 即可免登极速下载。[/dim]",
                 border_style="green"
-            ))
-        return True
+            ),
+            source="browser",
+        )
 
     # 2. Check native desktop app databases
     cookie = credentials_manager._harvest_from_desktop_apps(platform)
     if cookie:
         credentials_manager.save_credential(platform, cookie)
-        if agent_mode:
-            print(json.dumps({"status": "success", "platform": platform, "source": "desktop_app", "message": "Cookie harvested from desktop app database and saved"}, ensure_ascii=False, indent=2))
-        else:
-            console.print(Panel(
+        return _report_login_result(
+            platform,
+            agent_mode,
+            True,
+            "Cookie harvested from desktop app database and saved",
+            Panel(
                 f"[bold green]✔ 成功从本地桌面客户端数据库捕获到 {platform} 凭据！已自动保存。[/bold green]",
                 border_style="green"
-            ))
-        return True
+            ),
+            source="desktop_app",
+        )
 
     # 3. Automated Browser Capture window (zero manual copying)
     if not agent_mode:
@@ -693,40 +786,50 @@ def _handle_login(platform: str, agent_mode: bool = False) -> bool:
     if grab_bin and os.path.exists(grab_bin):
         try:
             cmd = [grab_bin, target_url, "--domain", domain, "--no-probe"]
-            result = subprocess.run(cmd)
+            result = subprocess.run(cmd, **({"stdout": subprocess.PIPE, "stderr": subprocess.PIPE} if agent_mode else {}))
             if result.returncode == 0:
-                if agent_mode:
-                    print(json.dumps({"status": "success", "platform": platform, "source": "grab-cookie", "message": "Captured credentials via grab-cookie"}, ensure_ascii=False, indent=2))
-                else:
-                    console.print("[bold green]✔ 凭据捕获完成！现在可直接下载。[/bold green]")
-                return True
+                return _report_login_result(
+                    platform,
+                    agent_mode,
+                    True,
+                    "Captured credentials via grab-cookie",
+                    "[bold green]✔ 凭据捕获完成！现在可直接下载。[/bold green]",
+                    source="grab-cookie",
+                )
 
             msg = f"grab-cookie exited with code {result.returncode}"
-            if agent_mode:
-                print(json.dumps({"status": "error", "platform": platform, "message": msg}, ensure_ascii=False, indent=2))
-            else:
-                console.print(f"[bold red]自动弹窗抓取失败: {msg}[/bold red]")
-            return False
+            return _report_login_result(
+                platform,
+                agent_mode,
+                False,
+                msg,
+                f"[bold red]自动弹窗抓取失败: {msg}[/bold red]",
+            )
         except Exception as e:
-            if agent_mode:
-                print(json.dumps({"status": "error", "platform": platform, "message": f"Auto-capture failed: {e}"}, ensure_ascii=False, indent=2))
-            else:
-                console.print(f"[bold red]自动弹窗抓取失败: {e}[/bold red]")
-            return False
+            msg = f"Auto-capture failed: {e}"
+            return _report_login_result(
+                platform,
+                agent_mode,
+                False,
+                msg,
+                f"[bold red]自动弹窗抓取失败: {e}[/bold red]",
+            )
     else:
         msg = (
             f"未检测到本地已登录凭据。可在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选终端，"
             f"或手动设置环境变量: export DA_{platform.upper()}_COOKIE='...'"
         )
-        if agent_mode:
-            print(json.dumps({"status": "error", "platform": platform, "message": msg}, ensure_ascii=False, indent=2))
-        else:
-            console.print(
+        return _report_login_result(
+            platform,
+            agent_mode,
+            False,
+            msg,
+            (
                 "[bold yellow]💡 一劳永逸全自动方法：[/bold yellow]\n"
                 "在 macOS『系统设置 ➔ 隐私与安全性 ➔ 完全磁盘访问权限』中勾选当前终端/IDE，\n"
                 f"da 就能永久静默自动读取 Chrome/Safari 中的 {platform} Cookie，无需任何操作！"
-            )
-        return False
+            ),
+        )
 
 
 def _handle_doctor(subtarget: Optional[str], agent_mode: bool, fix: bool = False):
@@ -781,12 +884,15 @@ def _handle_error(err: Exception, agent_mode: bool):
     """Deliver uniform error outputs for human CLI and agent skill."""
     err_type = type(err).__name__
     err_msg = str(err)
+    err_dict: Dict[str, Any] = {
+        "status": "error",
+        "error_type": err_type,
+        "message": err_msg
+    }
+    if hasattr(err, "details") and err.details:
+        err_dict["details"] = err.details
     if agent_mode:
-        print(json.dumps({
-            "status": "error",
-            "error_type": err_type,
-            "message": err_msg
-        }, ensure_ascii=False, indent=2))
+        print(json.dumps(err_dict, ensure_ascii=False, indent=2))
     else:
         err_console.print(Panel(
             f"[bold red]{err_type}:[/bold red] {err_msg}",
