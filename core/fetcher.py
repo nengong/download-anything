@@ -58,6 +58,20 @@ class Fetcher:
                 progress_callback(len(content), len(content))
             return len(content)
 
+        # Handle file: URI directly
+        if url.startswith("file://"):
+            import shutil
+            import urllib.request
+            # urlparse / url2pathname handles file:///path
+            parsed_path = urllib.request.url2pathname(url[7:])
+            local_src = Path(parsed_path)
+            if local_src != dest_path and local_src.exists():
+                shutil.copy2(local_src, dest_path)
+            content_len = dest_path.stat().st_size if dest_path.exists() else 0
+            if progress_callback:
+                progress_callback(content_len, content_len)
+            return content_len
+
         part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
         req_headers = {

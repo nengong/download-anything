@@ -1,0 +1,206 @@
+"""
+Music Unlocker and Universal Audio Transcoder Engine
+Supports decrypting client-encrypted music formats (e.g. NetEase Cloud Music .ncm)
+and transcoding diverse audio containers (FLAC, APE, WAV, OGG, M4A) into standard 320kbps MP3.
+"""
+import base64
+import json
+import os
+import shutil
+import struct
+import subprocess
+from pathlib import Path
+from typing import Optional, Dict, Any, Tuple, List
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+class MusicUnlocker:
+    """Decrypts proprietary music formats and standardizes audio to MP3."""
+
+    NCM_CORE_KEY = b"hzHramso5kInbaxW"
+    NCM_META_KEY = bytes([0x23, 0x31, 0x34, 0x6C, 0x6A, 0x6B, 0x5F, 0x21, 0x5C, 0x5D, 0x26, 0x30, 0x55, 0x3C, 0x27, 0x28])
+    NCM_MAGIC = b"CTENFDAM"
+
+    SUPPORTED_LOCAL_FORMATS = {".ncm", ".qmc0", ".qmc3", ".qmcflac", ".qmcogg", ".mflac", ".flac", ".ape", ".wav", ".ogg", ".opus", ".m4a", ".aac"}
+
+    @classmethod
+    def is_ncm(cls, file_path: Path) -> bool:
+        if not file_path.exists() or file_path.is_dir():
+            return False
+        if file_path.suffix.lower() == ".ncm":
+            return True
+        try:
+            with open(file_path, "rb") as f:
+                return f.read(8) == cls.NCM_MAGIC
+        except Exception:
+            return False
+
+    @classmethod
+    def unlock_ncm(cls, ncm_path: Path, dest_dir: Optional[Path] = None) -> Tuple[Path, Optional[Path], Dict[str, Any]]:
+        """
+        Decrypt NetEase .ncm file to clean audio (.mp3 / .flac) and extract embedded cover image and metadata.
+        Returns: (audio_path, cover_path, metadata)
+        """
+        if dest_dir is None:
+            dest_dir = ncm_path.parent
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(ncm_path, "rb") as f:
+            header = f.read(8)
+            if header != cls.NCM_MAGIC:
+                raise ValueError(f"File {ncm_path.name} is not a valid NCM encrypted file")
+
+            f.seek(2, 1)  # Gap 2 bytes
+
+            # 1. AES Core Key -> RC4 Key
+            key_len = struct.unpack("<I", f.read(4))[0]
+            key_data = bytearray(f.read(key_len))
+            for i in range(len(key_data)):
+                key_data[i] ^= 0x64
+
+            cipher = Cipher(algorithms.AES(cls.NCM_CORE_KEY), modes.ECB())
+            decryptor = cipher.decryptor()
+            decrypted_key = decryptor.update(bytes(key_data)) + decryptor.finalize()
+
+            # Skip header "neteasecloudmusic" (17 bytes) and unpad PKCS7
+            rc4_key = decrypted_key[17:]
+            if rc4_key:
+                pad = rc4_key[-1]
+                if pad <= 16:
+                    rc4_key = rc4_key[:-pad]
+
+            # 2. Metadata (Song Info)
+            meta_len = struct.unpack("<I", f.read(4))[0]
+            metadata = {}
+            if meta_len > 0:
+                meta_data = bytearray(f.read(meta_len))
+                for i in range(len(meta_data)):
+                    meta_data[i] ^= 0x63
+                cipher_meta = Cipher(algorithms.AES(cls.NCM_META_KEY), modes.ECB())
+                decryptor_meta = cipher_meta.decryptor()
+                decrypted_meta = decryptor_meta.update(bytes(meta_data)) + decryptor_meta.finalize()
+                # Skip "163 key(Don't modify):" (22 bytes) and unpad
+                clean_b64 = decrypted_meta[22:]
+                if clean_b64:
+                    pad = clean_b64[-1]
+                    if pad <= 16:
+                        clean_b64 = clean_b64[:-pad]
+                try:
+                    metadata = json.loads(base64.b64decode(clean_b64).decode("utf-8"))
+                except Exception:
+                    metadata = {}
+
+            # 3. Gap & CRC
+            f.seek(9, 1)
+
+            # 4. Album Cover Image
+            img_space = struct.unpack("<I", f.read(4))[0]
+            img_len = struct.unpack("<I", f.read(4))[0]
+            cover_path = None
+            if img_len > 0:
+                img_data = f.read(img_len)
+                cover_name = f"{ncm_path.stem}.cover.jpg"
+                cover_path = dest_dir / cover_name
+                with open(cover_path, "wb") as img_f:
+                    img_f.write(img_data)
+                if img_space > img_len:
+                    f.seek(img_space - img_len, 1)
+            elif img_space > 0:
+                f.seek(img_space, 1)
+
+            # 5. Build modified RC4 S-Box & repeating mask
+            box = list(range(256))
+            j = 0
+            for i in range(256):
+                j = (j + box[i] + rc4_key[i % len(rc4_key)]) & 0xff
+                box[i], box[j] = box[j], box[i]
+
+            mask = bytearray(256)
+            for i in range(256):
+                idx = (i + 1) & 0xff
+                mask[i] = box[(box[idx] + box[(box[idx] + idx) & 0xff]) & 0xff]
+
+            # 6. Decrypt Audio Stream
+            audio_format = metadata.get("format", "mp3").lower()
+            if audio_format not in ("mp3", "flac"):
+                audio_format = "mp3"
+            
+            raw_audio_path = dest_dir / f"{ncm_path.stem}.{audio_format}"
+            with open(raw_audio_path, "wb") as out_f:
+                chunk_size = 65536
+                offset = 0
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    buf = bytearray(chunk)
+                    for k in range(len(buf)):
+                        buf[k] ^= mask[(offset + k) & 0xff]
+                    out_f.write(buf)
+                    offset += len(chunk)
+
+        # 7. Standardize to MP3 if audio is FLAC
+        final_mp3_path = dest_dir / f"{ncm_path.stem}.mp3"
+        if audio_format != "mp3":
+            success = cls.transcode_to_mp3(
+                src_path=raw_audio_path,
+                dest_path=final_mp3_path,
+                cover_path=cover_path,
+                metadata={
+                    "title": metadata.get("musicName", ncm_path.stem),
+                    "artist": "/".join([a[0] for a in metadata.get("artist", [])]) if isinstance(metadata.get("artist"), list) else metadata.get("artist", ""),
+                    "album": metadata.get("album", "")
+                }
+            )
+            if success:
+                try:
+                    raw_audio_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return final_mp3_path, cover_path, metadata
+
+        return raw_audio_path, cover_path, metadata
+
+    @classmethod
+    def transcode_to_mp3(
+        cls,
+        src_path: Path,
+        dest_path: Path,
+        bitrate: str = "320k",
+        cover_path: Optional[Path] = None,
+        metadata: Optional[Dict[str, str]] = None
+    ) -> bool:
+        """Convert any audio file to standard 320kbps MP3 with embedded tags and cover art."""
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return False
+
+        cmd = [ffmpeg, "-y", "-i", str(src_path)]
+        if cover_path and cover_path.exists():
+            cmd.extend([
+                "-i", str(cover_path),
+                "-map", "0:a",
+                "-map", "1:0",
+                "-id3v2_version", "3",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)"
+            ])
+        else:
+            cmd.extend(["-map", "0:a"])
+
+        if metadata:
+            if metadata.get("title"):
+                cmd.extend(["-metadata", f"title={metadata['title']}"])
+            if metadata.get("artist"):
+                cmd.extend(["-metadata", f"artist={metadata['artist']}"])
+            if metadata.get("album"):
+                cmd.extend(["-metadata", f"album={metadata['album']}"])
+
+        cmd.extend(["-codec:a", "libmp3lame", "-b:a", bitrate, str(dest_path)])
+
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            return res.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 512
+        except Exception:
+            return False

@@ -20,6 +20,10 @@ from drivers.social.weibo import WeiboDriver
 from drivers.dev.github_dir import GitHubDirDriver
 from drivers.audio.xiaoyuzhou import XiaoyuzhouDriver
 from drivers.audio.apple_podcasts import ApplePodcastsDriver
+from drivers.audio.music_163 import NetEaseMusicDriver
+from drivers.audio.spotify_apple import SpotifyAppleMusicDriver
+from drivers.audio.open_music import OpenMusicDriver
+from drivers.audio.local_audio import LocalAudioDriver
 from drivers.docs.wechat import WeChatDriver
 from drivers.docs.web_article import WebArticleDriver
 from drivers.software.ms_store import MicrosoftStoreDriver
@@ -28,9 +32,13 @@ from drivers.software.apk import AndroidAPKDriver
 def get_default_drivers() -> List[BaseDriver]:
     """Return an instantiated list of all active drivers in priority order."""
     return [
+        LocalAudioDriver(),
         LanzouDriver(),
         QuarkDriver(),
         BaiduDriver(),
+        NetEaseMusicDriver(),
+        SpotifyAppleMusicDriver(),
+        OpenMusicDriver(),
         ShadowLibraryDriver(),
         ArxivDriver(),
         DOIDriver(),
