@@ -7,6 +7,7 @@ Unit Tests for Advanced Capabilities:
 - Sidecar .lrc lyrics generation, Bilibili .srt subtitle conversion, and Audio stream container verification
 """
 import base64
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -79,6 +80,7 @@ def test_asset_index_db_caching_and_dirty_share_hit(monkeypatch):
             output_dir=tpath,
             primary_file=dummy_file,
             size_bytes=dummy_file.stat().st_size,
+            variant="default:delivery-v2:unzip=1:sidecar=1",
             sidecars={"cover": str(tpath / "cover.jpg")}
         )
 
@@ -154,6 +156,66 @@ def test_verifier_modern_audio_containers(tmp_path):
     webm_as_mp3.write_bytes(b"\x1a\x45\xdf\xa3\x01\x00\x00\x00\x00\x00\x00\x1f")
     res_webm = Verifier.verify(webm_as_mp3, expected_ext="mp3")
     assert not res_webm.valid
+
+
+@pytest.mark.parametrize("actual,declared", [("epub", "pdf"), ("pdf", "epub")])
+def test_shadow_library_corrects_downloaded_ebook_suffix(tmp_path, ebook_payload, actual, declared):
+    payload = ebook_payload(actual)
+    package = _data_package(f"book.{declared}", payload)
+    package.platform = "shadow_library"
+    package.metadata["extension"] = declared
+    driver = _StubDriver(package)
+
+    def download(**kwargs):
+        kwargs["dest_path"].write_bytes(payload)
+        return len(payload)
+
+    with patch("cli.get_default_drivers", return_value=[driver]), \
+         patch("cli.Fetcher.download", side_effect=download), \
+         patch("cli.AssetIndexDB.record"), \
+         patch("cli.VaultSync.sync_to_obsidian", return_value=None):
+        result = process_download("https://example.com/book", output_dir=str(tmp_path),
+                                  agent_mode=True, auto_unzip=False)
+    primary = Path(result["primary_asset"])
+    assert result["status"] == "success"
+    assert primary.suffix == f".{actual}"
+    assert primary.read_bytes() == payload
+    assert package.primary_asset.local_path == primary
+    assert package.primary_asset.filename == primary.name
+    assert package.metadata["extension"] == actual
+    assert not primary.with_suffix(f".{declared}").exists()
+    assert result["verification"]["detected_type"] == actual
+    for key in ("info_json", "named_info_json"):
+        metadata = json.loads(Path(result["sidecars"][key]).read_text())
+        assert metadata["assets"]["primary"] == primary.name
+    assert primary.name in Path(result["sidecars"]["markdown"]).read_text()
+
+
+def test_shadow_library_suffix_collision_preserves_existing_target(tmp_path, ebook_payload):
+    payload = ebook_payload("epub")
+    package = _data_package("book.pdf", payload)
+    package.platform = "shadow_library"
+    existing = tmp_path / "book.epub"
+    existing.write_bytes(b"existing book")
+    with patch("cli.get_default_drivers", return_value=[_StubDriver(package)]), \
+         patch("cli.resolve_output_directory", return_value=tmp_path), \
+         patch("cli.AssetIndexDB.record"):
+        result = process_download("https://example.com/book", output_dir=str(tmp_path), agent_mode=True)
+    assert result["status"] == "success"
+    assert Path(result["primary_asset"]).read_bytes() == payload
+    assert Path(result["primary_asset"]).parent != tmp_path
+    assert existing.read_bytes() == b"existing book"
+
+
+def test_other_drivers_do_not_correct_ebook_suffix(tmp_path, ebook_payload):
+    package = _data_package("book.pdf", ebook_payload("epub"))
+    with patch("cli.get_default_drivers", return_value=[_StubDriver(package)]), \
+         patch("cli.AssetIndexDB.record"), \
+         patch("cli.detect_ebook_format") as detect:
+        with pytest.raises(DAError, match="Invalid PDF header"):
+            process_download("https://example.com/book", output_dir=str(tmp_path), agent_mode=True)
+    detect.assert_not_called()
+    assert package.primary_asset.local_path.suffix == ".pdf"
 
 
 def test_process_download_rejects_unsafe_primary_filename(tmp_path):
@@ -240,7 +302,7 @@ def test_audio_only_queries_dedicated_cache_variant():
             process_download("https://example.com/asset", agent_mode=True, audio_only=True)
     assert query.call_args_list
     assert all(
-        call.args == ("https://example.com/asset",) and call.kwargs == {"variant": "audio-only"}
+        call.args == ("https://example.com/asset",) and call.kwargs == {"variant": "audio-only:delivery-v2:unzip=1:sidecar=1"}
         for call in query.call_args_list
     )
 
@@ -273,10 +335,10 @@ def test_bilibili_subtitle_srt_conversion(monkeypatch):
     def mock_get(url, *args, **kwargs):
         resp = MagicMock()
         resp.status_code = 200
-        if "player/v2" in url:
+        if "player/wbi/v2" in url:
             resp.json.return_value = {
                 "code": 0,
-                "data": {"subtitle": {"subtitles": [{"subtitle_url": "//i0.hdslb.com/bfs/subtitle/test.json"}]}}
+                "data": {"subtitle": {"subtitles": [{"subtitle_url": "//i0.hdslb.com/bfs/subtitle/12345-test.json"}]}}
             }
         else:
             resp.json.return_value = {

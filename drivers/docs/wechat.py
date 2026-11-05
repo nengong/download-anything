@@ -6,6 +6,7 @@ import re
 from typing import Optional, List
 from bs4 import BeautifulSoup, NavigableString, Tag
 import requests
+from core.url_policy import is_http_url, require_http_url
 
 from core.exceptions import ExtractionError
 from drivers.base import BaseDriver, AssetPackage, TargetAsset
@@ -32,7 +33,7 @@ class WeChatDriver(BaseDriver):
     }
 
     def can_handle(self, url: str) -> bool:
-        return "mp.weixin.qq.com" in url or bool(self.URL_REGEX.search(url))
+        return is_http_url(url, ("mp.weixin.qq.com",)) and bool(self.URL_REGEX.match(url))
 
     def extract(self, url: str, **kwargs) -> AssetPackage:
         session = requests.Session()
@@ -79,7 +80,7 @@ class WeChatDriver(BaseDriver):
 
             img_filename = f"img_{image_counter:02d}.{data_type}"
             assets.append(TargetAsset(
-                url=src,
+                url=require_http_url(src),
                 filename=img_filename,
                 file_type="extra",
                 headers={"Referer": "https://mp.weixin.qq.com/", "User-Agent": self.DEFAULT_HEADERS["User-Agent"]}

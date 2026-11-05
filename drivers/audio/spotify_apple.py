@@ -1,7 +1,7 @@
 """
-Global Music Platform Driver: Spotify & Apple Music (SpotDL Architecture)
+Global Music Platform Driver: Spotify & Apple Music
 Extracts official 3000px album cover and track metadata from Spotify and Apple Music,
-and matches the studio audio stream via global acoustic mirrors.
+and matches a playable audio stream via public search sources.
 """
 import re
 from typing import Optional, List, Dict, Any, Tuple
@@ -13,11 +13,10 @@ from drivers.base import BaseDriver, AssetPackage, TargetAsset
 
 class SpotifyAppleMusicDriver(BaseDriver):
     """
-    Driver for Spotify and Apple Music tracks.
-    Conforms to the SpotDL architecture:
-    1. Extracts high-resolution artwork & ISRC / metadata from official APIs.
-    2. Matches official audio track without DRM circumvention.
-    3. Bundles into clean MP3 with embedded metadata.
+    Driver for Spotify and Apple Music tracks:
+    1. Extracts high-resolution artwork & track metadata from official APIs.
+    2. Matches a playable audio stream from public sources.
+    3. Saves MP3 alongside high-res cover and metadata sidecar.
     """
 
     name = "spotify_apple"
@@ -120,7 +119,7 @@ class SpotifyAppleMusicDriver(BaseDriver):
             f"> - **平台**: Apple Music (ID: `{track_id}`)\n"
             f"> - **封面画质**: 3000×3000 Ultra HD\n\n"
             f"---\n"
-            f"基于 SpotDL 声学指纹检索，无损提取官方正版母带音频并注入原版数字封面与 ID3 标签。\n"
+            f"已提取 Apple Music 官方曲目元数据与高清专辑封面，并通过公开音源匹配保存 MP3 音频。\n"
         )
 
         metadata = {
@@ -187,7 +186,7 @@ class SpotifyAppleMusicDriver(BaseDriver):
             f"> - **平台**: Spotify (ID: `{track_id}`)\n"
             f"> - **来源网址**: <{url}>\n\n"
             f"---\n"
-            f"基于 SpotDL 架构完成跨平台声学对齐提取，产出独立离线 320kbps MP3 与原版封面。\n"
+            f"已提取 Spotify 官方曲目信息与封面，并通过公开音源匹配保存 MP3 音频。\n"
         )
 
         metadata = {

@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 class MusicUnlocker:
     """Decrypts proprietary music formats and standardizes audio to MP3."""
 
-    NCM_CORE_KEY = b"hzHramso5kInbaxW"
+    NCM_CORE_KEY = b"hzHRAmso5kInbaxW"
     NCM_META_KEY = bytes([0x23, 0x31, 0x34, 0x6C, 0x6A, 0x6B, 0x5F, 0x21, 0x5C, 0x5D, 0x26, 0x30, 0x55, 0x3C, 0x27, 0x28])
     NCM_MAGIC = b"CTENFDAM"
 
@@ -59,40 +59,26 @@ class MusicUnlocker:
             for i in range(len(key_data)):
                 key_data[i] ^= 0x64
 
-            cipher = Cipher(algorithms.AES(cls.NCM_CORE_KEY), modes.ECB())
-            decryptor = cipher.decryptor()
-            decrypted_key = decryptor.update(bytes(key_data)) + decryptor.finalize()
+            decrypted_key = cls._aes_ecb_decrypt(cls.NCM_CORE_KEY, bytes(key_data))
+            rc4_key = cls._pkcs7_unpad(decrypted_key)[17:]
 
-            # Skip header "neteasecloudmusic" (17 bytes) and unpad PKCS7
-            rc4_key = decrypted_key[17:]
-            if rc4_key:
-                pad = rc4_key[-1]
-                if pad <= 16:
-                    rc4_key = rc4_key[:-pad]
-
-            # 2. Metadata (Song Info)
+            # 2. Metadata: XOR 0x63 -> skip 22-byte prefix -> base64 -> AES -> JSON
             meta_len = struct.unpack("<I", f.read(4))[0]
             metadata = {}
             if meta_len > 0:
                 meta_data = bytearray(f.read(meta_len))
                 for i in range(len(meta_data)):
                     meta_data[i] ^= 0x63
-                cipher_meta = Cipher(algorithms.AES(cls.NCM_META_KEY), modes.ECB())
-                decryptor_meta = cipher_meta.decryptor()
-                decrypted_meta = decryptor_meta.update(bytes(meta_data)) + decryptor_meta.finalize()
-                # Skip "163 key(Don't modify):" (22 bytes) and unpad
-                clean_b64 = decrypted_meta[22:]
-                if clean_b64:
-                    pad = clean_b64[-1]
-                    if pad <= 16:
-                        clean_b64 = clean_b64[:-pad]
+                meta_b64 = base64.b64decode(bytes(meta_data[22:]))
+                decrypted_meta = cls._aes_ecb_decrypt(cls.NCM_META_KEY, meta_b64)
+                meta_text = cls._pkcs7_unpad(decrypted_meta).decode("utf-8")
                 try:
-                    metadata = json.loads(base64.b64decode(clean_b64).decode("utf-8"))
+                    metadata = json.loads(meta_text[6:])
                 except Exception:
                     metadata = {}
 
-            # 3. Gap & CRC
-            f.seek(9, 1)
+            # 3. Gap
+            f.seek(5, 1)
 
             # 4. Album Cover Image
             img_space = struct.unpack("<I", f.read(4))[0]
@@ -104,63 +90,106 @@ class MusicUnlocker:
                 cover_path = dest_dir / cover_name
                 with open(cover_path, "wb") as img_f:
                     img_f.write(img_data)
-                if img_space > img_len:
-                    f.seek(img_space - img_len, 1)
-            elif img_space > 0:
-                f.seek(img_space, 1)
+            if img_space > img_len:
+                f.seek(img_space - img_len, 1)
 
-            # 5. Build modified RC4 S-Box & repeating mask
+            # 5. Build modified RC4 S-Box and repeating mask
             box = list(range(256))
             j = 0
             for i in range(256):
                 j = (j + box[i] + rc4_key[i % len(rc4_key)]) & 0xff
                 box[i], box[j] = box[j], box[i]
 
-            mask = bytearray(256)
-            for i in range(256):
-                idx = (i + 1) & 0xff
-                mask[i] = box[(box[idx] + box[(box[idx] + idx) & 0xff]) & 0xff]
+            mask_stream = bytes(
+                box[(box[i] + box[(i + box[i]) & 0xff]) & 0xff] for i in range(256)
+            )
 
             # 6. Decrypt Audio Stream
-            audio_format = metadata.get("format", "mp3").lower()
+            audio_format = str(metadata.get("format", "mp3")).lower()
             if audio_format not in ("mp3", "flac"):
                 audio_format = "mp3"
-            
+
+            audio_data = f.read()
+            mask = (mask_stream * (len(audio_data) // 256 + 1))[1:1 + len(audio_data)]
             raw_audio_path = dest_dir / f"{ncm_path.stem}.{audio_format}"
             with open(raw_audio_path, "wb") as out_f:
-                chunk_size = 65536
-                offset = 0
-                while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    buf = bytearray(chunk)
-                    for k in range(len(buf)):
-                        buf[k] ^= mask[(offset + k) & 0xff]
-                    out_f.write(buf)
-                    offset += len(chunk)
+                out_f.write(bytes(a ^ b for a, b in zip(audio_data, mask)))
 
-        # 7. Standardize to MP3 if audio is FLAC
+        # 7. Embed cover/tags; standardize FLAC to MP3
         final_mp3_path = dest_dir / f"{ncm_path.stem}.mp3"
-        if audio_format != "mp3":
-            success = cls.transcode_to_mp3(
-                src_path=raw_audio_path,
-                dest_path=final_mp3_path,
-                cover_path=cover_path,
-                metadata={
-                    "title": metadata.get("musicName", ncm_path.stem),
-                    "artist": "/".join([a[0] for a in metadata.get("artist", [])]) if isinstance(metadata.get("artist"), list) else metadata.get("artist", ""),
-                    "album": metadata.get("album", "")
-                }
-            )
-            if success:
-                try:
-                    raw_audio_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        tag_meta = {
+            "title": metadata.get("musicName", ncm_path.stem),
+            "artist": "/".join([a[0] for a in metadata.get("artist", [])]) if isinstance(metadata.get("artist"), list) else metadata.get("artist", ""),
+            "album": metadata.get("album", ""),
+        }
+        if audio_format == "mp3":
+            tagged_path = dest_dir / f"{ncm_path.stem}.tagged.mp3"
+            if cls._embed_mp3_metadata(raw_audio_path, tagged_path, cover_path, tag_meta):
+                raw_audio_path.unlink(missing_ok=True)
+                tagged_path.replace(final_mp3_path)
                 return final_mp3_path, cover_path, metadata
+            return raw_audio_path, cover_path, metadata
+
+        if cls.transcode_to_mp3(
+            src_path=raw_audio_path,
+            dest_path=final_mp3_path,
+            cover_path=cover_path,
+            metadata=tag_meta
+        ):
+            try:
+                raw_audio_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return final_mp3_path, cover_path, metadata
 
         return raw_audio_path, cover_path, metadata
+
+    @staticmethod
+    def _aes_ecb_decrypt(key: bytes, data: bytes) -> bytes:
+        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        decryptor = cipher.decryptor()
+        return decryptor.update(data) + decryptor.finalize()
+
+    @staticmethod
+    def _pkcs7_unpad(data: bytes, block_size: int = 16) -> bytes:
+        if not data:
+            return data
+        pad = data[-1]
+        if 0 < pad <= block_size and data.endswith(bytes([pad]) * pad):
+            return data[:-pad]
+        return data
+
+    @staticmethod
+    def _embed_mp3_metadata(src_path: Path, dest_path: Path, cover_path: Optional[Path],
+                            metadata: Dict[str, str]) -> bool:
+        """Attach tags and cover to an existing MP3 without re-encoding the audio."""
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return False
+
+        cmd = [ffmpeg, "-y", "-i", str(src_path)]
+        if cover_path and cover_path.exists():
+            cmd.extend([
+                "-i", str(cover_path),
+                "-map", "0:a",
+                "-map", "1:0",
+                "-id3v2_version", "3",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)",
+            ])
+        else:
+            cmd.extend(["-map", "0:a"])
+        cmd.extend(["-c:a", "copy"])
+        for key in ("title", "artist", "album"):
+            if metadata.get(key):
+                cmd.extend(["-metadata", f"{key}={metadata[key]}"])
+        cmd.append(str(dest_path))
+
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            return res.returncode == 0 and dest_path.exists() and dest_path.stat().st_size > 512
+        except Exception:
+            return False
 
     @classmethod
     def transcode_to_mp3(

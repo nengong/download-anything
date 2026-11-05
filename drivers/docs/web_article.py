@@ -8,6 +8,7 @@ import re
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin, urlparse
 import requests
+from core.url_policy import is_http_url, require_http_url
 from bs4 import BeautifulSoup
 from drivers.base import BaseDriver, AssetPackage, TargetAsset
 from core.exceptions import ExtractionError
@@ -54,13 +55,14 @@ class WebArticleDriver(BaseDriver):
                 return False
 
         parsed = urlparse(clean)
-        return any(d in parsed.netloc for d in self.SUPPORTED_DOMAINS)
+        return is_http_url(url, self.SUPPORTED_DOMAINS)
 
     def extract(self, url: str, **kwargs) -> AssetPackage:
         session = requests.Session()
         session.headers.update(self.DEFAULT_HEADERS)
         try:
             resp = session.get(url, timeout=12)
+            resp.raise_for_status()
             if resp.encoding == "ISO-8859-1" or not resp.encoding:
                 resp.encoding = resp.apparent_encoding or "utf-8"
             html = resp.text
@@ -108,7 +110,7 @@ class WebArticleDriver(BaseDriver):
             src = img.get("data-actualsrc") or img.get("data-original") or img.get("data-src") or img.get("src")
             if not src or src.startswith("data:"):
                 continue
-            full_img_url = urljoin(url, src)
+            full_img_url = require_http_url(urljoin(resp.url, src))
             ext = ".jpg"
             if ".png" in full_img_url.lower():
                 ext = ".png"

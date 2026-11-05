@@ -4,7 +4,7 @@ Base Driver Specification and Data Structures
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 @dataclass
 class TargetAsset:
@@ -18,6 +18,12 @@ class TargetAsset:
     local_path: Optional[Path] = None
     downloaded_bytes: int = 0
     verified: bool = False
+    # "http": the CLI fetcher downloads `url` directly.
+    # "ytdlp": yt-dlp owns the transfer (needed for HLS/DASH manifests and merging).
+    download_strategy: str = "http"
+    download_options: Dict[str, Any] = field(default_factory=dict)
+    cookie_jar: Any = None  # Preserve Domain/Path/Secure; never serialize as headers.
+    local_source: Optional[Path] = None  # Set only by an explicit local-file driver.
 
 AssetFile = TargetAsset
 
@@ -63,6 +69,23 @@ class BaseDriver(ABC):
         Used to silently delete cloud drive temporary files (e.g., Quark, Baidu).
         """
         pass
+
+    def download_primary(
+        self,
+        asset: TargetAsset,
+        dest_path: Path,
+        max_bytes: int,
+        progress_callback=None,
+    ) -> Tuple[int, Path]:
+        """
+        Optional native downloader for assets whose transfer cannot be expressed
+        as a single HTTP request (e.g. HLS/DASH manifests).
+
+        Return ``(saved_byte_count, final_path)``, or raise if the transfer fails.
+        ``final_path`` normally equals ``dest_path`` but may differ when the
+        downloader produces a different container than the declared extension.
+        """
+        raise NotImplementedError(f"{self.name} does not provide a native downloader")
 
     def cleanup_after_error(self, package: AssetPackage, error: BaseException) -> None:
         """Preserve the original failure while surfacing any cleanup failure."""

@@ -2,6 +2,7 @@
 Unit tests for path_resolver and doctor
 """
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,3 +53,71 @@ def test_doctor_check_all():
     assert "requests" in report["dependencies"]
     assert report["dependencies"]["requests"]["installed"] is True
     assert "curl" in report["external_tools"]
+    assert "media_ready" in report
+
+
+def test_doctor_scopes_ffmpeg_to_media_only(monkeypatch):
+    def fake_which(tool):
+        return None if tool in ("ffmpeg", "ffprobe") else "/usr/bin/" + tool
+
+    monkeypatch.setattr("core.doctor.shutil.which", fake_which)
+    report = Doctor.check_all()
+    ffmpeg = report["external_tools"]["ffmpeg"]
+    assert ffmpeg["installed"] is False
+    assert ffmpeg["required"] is False
+    assert ffmpeg["scope"] == "仅音视频"
+    assert "文档" in ffmpeg["unaffected"]
+    assert ffmpeg["install_hint"]
+    assert report["media_ready"] is False
+    # Missing FFmpeg must not mark text/document workloads as broken.
+    assert report["all_required_ok"] is True
+
+
+def test_doctor_media_ready_when_tools_are_present(monkeypatch):
+    monkeypatch.setattr("core.doctor.shutil.which", lambda tool: "/usr/bin/" + tool)
+    report = Doctor.check_all()
+    assert report["media_ready"] is True
+
+
+def test_auto_repair_switches_to_mirror_after_timeout(monkeypatch):
+    report = {
+        "dependencies": {
+            "demo": {"installed": False, "pip_name": "demo", "required": True}
+        }
+    }
+    monkeypatch.setattr(Doctor, "check_all", staticmethod(lambda: report))
+    monkeypatch.setattr("core.doctor.shutil.which", lambda _tool: None)
+    monkeypatch.delenv("DA_PIP_INDEX_URL", raising=False)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(command, 1)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("core.doctor.subprocess.run", fake_run)
+    assert Doctor.auto_repair() is True
+    assert len(calls) == 2
+    assert "--index-url" in calls[1]
+    assert "pypi.tuna.tsinghua.edu.cn" in " ".join(calls[1])
+
+
+def test_doctor_failure_lines_explain_missing_required_tool():
+    import cli
+
+    report = {
+        "python_version": {"ok": True},
+        "dependencies": {},
+        "external_tools": {
+            "curl": {"installed": False, "required": True},
+            "ffmpeg": {"installed": False, "required": False},
+        },
+    }
+
+    lines = cli._doctor_failure_lines(report)
+    text = "\n".join(lines)
+
+    assert "curl" in text
+    assert "ffmpeg" not in text
+    assert text.strip()

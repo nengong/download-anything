@@ -52,8 +52,9 @@ config/credentials.yaml
 *.cookie
 *.cookies.txt
 
-# Local outputs & temp files
+# Local outputs, internal reports & temp files
 /downloads/
 /output/
+/reports/
 *.tmp
 *.log

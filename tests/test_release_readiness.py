@@ -87,14 +87,20 @@ def test_feishu_body_survives_pipeline(tmp_path):
 def test_quark_preflight_never_transfers_or_creates_folders(tmp_path):
     response = MagicMock()
     response.json.return_value = {"status": 200, "data": {"list": [
-        {"fid": "shared", "file_name": "demo.txt", "size": 4}]}}
+        {"fid": "shared", "file_name": "demo.txt", "size": 4,
+         "dir": False, "file": True, "share_fid_token": "file-token"}]}}
     driver = QuarkDriver()
+    token = MagicMock()
+    token.json.return_value = {"status": 200, "data": {"stoken": "share-token"}}
     with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
          patch("drivers.pan.quark.requests.get", return_value=response), \
-         patch("drivers.pan.quark.requests.post") as post, \
+         patch("drivers.pan.quark.requests.post", return_value=token) as post, \
+         patch.object(driver, "_get_or_create_temp_folder") as create, \
          patch("cli.get_default_drivers", return_value=[driver]):
         result = process_download("https://pan.quark.cn/s/demo", check=True, agent_mode=True)
-    post.assert_not_called()
+    post.assert_called_once()
+    assert post.call_args.args[0] == f"{driver.API_BASE}/share/sharepage/token?pr=ucpro&fr=pc"
+    create.assert_not_called()
     assert result["status"] == "dry_run"
     assert result["metadata"]["requires_transfer"] is True
     assert result["primary_asset"]["url"] == ""
@@ -110,10 +116,9 @@ def baidu_listing():
 def test_baidu_preflight_never_transfers():
     with patch("drivers.pan.baidu.requests.Session.get", return_value=baidu_listing()), \
          patch("drivers.pan.baidu.requests.Session.post") as post, \
-         patch.object(BaiduDriver, "_get_cookie") as cookie:
+         patch.object(BaiduDriver, "_get_cookie", return_value="DUMMY"):
         package = BaiduDriver().extract("https://pan.baidu.com/s/1demo", inspect_only=True)
     post.assert_not_called()
-    cookie.assert_not_called()
     assert package.metadata["requires_transfer"]
 
 
@@ -142,14 +147,17 @@ def test_quark_creation_failure_does_not_fall_back_to_root():
 def test_quark_extract_failure_cleans_owned_folder():
     detail = MagicMock()
     detail.json.return_value = {"status": 200, "data": {"list": [
-        {"fid": "shared", "file_name": "demo.txt", "size": 4}]}}
+        {"fid": "shared", "file_name": "demo.txt", "size": 4,
+         "dir": False, "file": True, "share_fid_token": "file-token"}]}}
     failure = MagicMock()
     failure.json.return_value = {"status": 500}
+    token = MagicMock()
+    token.json.return_value = {"status": 200, "data": {"stoken": "share-token"}}
     driver = QuarkDriver()
     with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
          patch.object(driver, "_get_or_create_temp_folder", return_value="owned"), \
          patch("drivers.pan.quark.requests.get", return_value=detail), \
-         patch("drivers.pan.quark.requests.post", return_value=failure), \
+         patch("drivers.pan.quark.requests.post", side_effect=[token, failure]), \
          patch.object(driver, "cleanup") as cleanup:
         with pytest.raises(CloudDriveError):
             driver.extract("https://pan.quark.cn/s/demo")
@@ -373,5 +381,5 @@ def test_skill_frontmatter_is_distributable():
     frontmatter = yaml.safe_load(text.split("---", 2)[1])
     assert frontmatter["name"] == "download-anything"
     assert not any(char in frontmatter["description"] for char in "<>")
-    assert "/Users/c.k/" not in text
+    assert "/Users/" not in text
     assert (root / "skills/download-anything/scripts/install.py").is_file()

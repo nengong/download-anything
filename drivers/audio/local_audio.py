@@ -39,6 +39,7 @@ class LocalAudioDriver(BaseDriver):
         if kwargs.get("inspect_only"):
             return AssetPackage(title=file_path.stem, platform=self.name, assets=[TargetAsset(
                 filename=file_path.name, url=file_path.as_uri(), expected_size=file_path.stat().st_size,
+                local_source=file_path,
             )], metadata={"requires_processing": True, "original_file": str(file_path)})
 
         stem = file_path.stem
@@ -70,7 +71,8 @@ class LocalAudioDriver(BaseDriver):
                 filename=audio_path.name,
                 url=audio_path.as_uri(),
                 file_type="primary",
-                expected_size=audio_path.stat().st_size if audio_path.exists() else None
+                expected_size=audio_path.stat().st_size if audio_path.exists() else None,
+                local_source=audio_path,
             )
         ]
 
@@ -79,7 +81,8 @@ class LocalAudioDriver(BaseDriver):
                 filename=cover_path.name,
                 url=cover_path.as_uri(),
                 file_type="cover",
-                expected_size=cover_path.stat().st_size
+                expected_size=cover_path.stat().st_size,
+                local_source=cover_path,
             ))
 
         markdown_body = (

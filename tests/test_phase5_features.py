@@ -104,6 +104,7 @@ def test_web_article_driver_extract(monkeypatch):
     </html>
     """
     mock_resp = MagicMock()
+    mock_resp.url = "https://zhuanlan.zhihu.com/p/654321"
     mock_resp.text = sample_html
     mock_resp.apparent_encoding = "utf-8"
     mock_resp.headers = {"Date": "Wed, 04 Nov 2026 00:00:00 GMT"}
@@ -155,9 +156,10 @@ def test_audio_extraction_from_video():
 
         # Mock ffmpeg success
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            target_m4a = tpath / "sample.m4a"
-            target_m4a.write_bytes(b"\x00" * 3000)
+            def produce(command, **kwargs):
+                Path(command[-1]).write_bytes(b"\x00" * 3000)
+                return MagicMock(returncode=0)
+            mock_run.side_effect = produce
             res = _extract_audio_from_video(dummy_mp4)
             assert res is not None
             assert res.name == "sample.m4a"

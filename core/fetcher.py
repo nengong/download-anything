@@ -10,6 +10,7 @@ from typing import Optional, Callable, Dict
 import requests
 
 from core.exceptions import DownloadError, FileTooLargeError
+from core.url_policy import require_http_url
 
 DEFAULT_MAX_BYTES = 500 * 1024 * 1024  # 500 MB
 DEFAULT_CHUNK_SIZE = 65536            # 64 KB
@@ -44,7 +45,9 @@ class Fetcher:
         dest_path: Path,
         headers: Optional[Dict[str, str]] = None,
         expected_size: Optional[int] = None,
-        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None
+        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None,
+        cookie_jar=None,
+        local_source: Optional[Path] = None,
     ) -> int:
         """
         Download remote stream to dest_path with resume support, size guard,
@@ -83,6 +86,8 @@ class Fetcher:
             # urlparse / url2pathname handles file:///path
             parsed_path = urllib.request.url2pathname(url[7:])
             local_src = Path(parsed_path)
+            if local_source is None or local_src.resolve() != Path(local_source).resolve():
+                raise DownloadError("Local file access requires an explicit local source")
             if not local_src.is_file():
                 raise DownloadError("Local source file is missing or is not a regular file")
             if local_src.exists() and local_src.stat().st_size > self.options.max_bytes:
@@ -103,6 +108,7 @@ class Fetcher:
                 progress_callback(content_len, content_len)
             return content_len
 
+        require_http_url(url)
         part_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
         req_headers = {
@@ -142,7 +148,8 @@ class Fetcher:
                     headers=attempt_headers,
                     stream=True,
                     timeout=(15, self.options.inactivity_timeout),
-                    allow_redirects=True
+                    allow_redirects=True,
+                    **({"cookies": cookie_jar} if cookie_jar is not None and active_url == url else {}),
                 ) as resp:
                     if resp.status_code == 416:
                         match = re.fullmatch(r"bytes \*/(\d+)", resp.headers.get("Content-Range", ""))
@@ -241,7 +248,8 @@ class Fetcher:
                 time.sleep(1.0 * attempt)
 
         # 2. Seamless failover to native curl if requests struggled
-        curl_success = self._download_via_curl(url, part_path, dest_path, req_headers, progress_callback, expected_size)
+        curl_success = self._download_via_curl(url, part_path, dest_path, req_headers, progress_callback, expected_size,
+                                             cookie_jar=cookie_jar)
         if curl_success:
             return dest_path.stat().st_size
 
@@ -258,10 +266,13 @@ class Fetcher:
         headers: Dict[str, str],
         progress_callback: Optional[Callable[[int, Optional[int]], None]] = None,
         expected_size: Optional[int] = None,
+        cookie_jar=None,
     ) -> bool:
         """Secondary transfer engine using curl with auto-resume and HTTP/1.1+HTTP/2."""
+        cookie_file = None
         try:
             cmd = ["curl", "-C", "-", "-fsSL", "--connect-timeout", "15",
+                   "--proto", "=http,https", "--proto-redir", "=http,https",
                    "--speed-time", str(self.options.inactivity_timeout), "--speed-limit", "1",
                    "--max-filesize", str(self.options.max_bytes)]
             for k, v in headers.items():
@@ -271,6 +282,16 @@ class Fetcher:
                     cmd.extend(["-A", v])
                 else:
                     cmd.extend(["-H", f"{k}: {v}"])
+            if cookie_jar is not None:
+                import tempfile
+                from http.cookiejar import MozillaCookieJar
+                with tempfile.NamedTemporaryFile(prefix="da-cookies-", delete=False) as tmp:
+                    cookie_file = Path(tmp.name)
+                scoped = MozillaCookieJar(str(cookie_file))
+                from core.url_policy import copy_cookies
+                copy_cookies(cookie_jar, scoped)
+                scoped.save(ignore_discard=True, ignore_expires=False)
+                cmd.extend(["--cookie", str(cookie_file)])
             cmd.extend([url, "-o", str(part_path)])
 
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -297,4 +318,7 @@ class Fetcher:
             raise
         except Exception:
             pass
+        finally:
+            if cookie_file is not None:
+                cookie_file.unlink(missing_ok=True)
         return False

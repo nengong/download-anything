@@ -1,13 +1,13 @@
 """
 Unit Tests for Drivers (Lanzou, Quark, Shadow Library)
 """
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import pytest
 from drivers.pan.lanzou import LanzouDriver
 from drivers.pan.quark import QuarkDriver
 from drivers.pan.baidu import BaiduDriver
 from drivers.books.shadow_library import ShadowLibraryDriver
-from core.exceptions import AuthenticationRequiredError, ExtractionError
+from core.exceptions import AuthenticationRequiredError, CloudDriveError, ExtractionError
 
 def test_lanzou_driver_can_handle():
     driver = LanzouDriver()
@@ -26,6 +26,181 @@ def test_quark_driver_missing_cookie_raises(monkeypatch):
     with pytest.raises(AuthenticationRequiredError) as exc_info:
         driver.extract("https://pan.quark.cn/s/abcdef123456")
     assert "Quark Cloud Drive download requires authentication cookie" in str(exc_info.value)
+
+def quark_response(data, status=200):
+    response = MagicMock()
+    response.json.return_value = {"status": status, "data": data}
+    return response
+
+
+def quark_file():
+    return {"fid": "source-file", "file_name": "first.exe", "size": 123,
+            "dir": False, "file": True, "share_fid_token": "file-token"}
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_quark_token_detail_and_save_payload(nested):
+    driver = QuarkDriver()
+    events = []
+    listings = [quark_response({"list": [quark_file()]})]
+    if nested:
+        listings.insert(0, quark_response({"list": [
+            {"fid": "source-folder", "file_name": "folder", "dir": True, "file": False}]}))
+
+    def get(url, **kwargs):
+        events.append("detail")
+        return listings.pop(0)
+
+    def post(url, **kwargs):
+        if "/token?" in url:
+            events.append("token")
+            return quark_response({"stoken": "share-token"})
+        if "/save?" in url:
+            events.append("save")
+            return quark_response({"task_id": "task"})
+        if "/download?" in url:
+            return quark_response([{"download_url": "https://example.invalid/file"}])
+        pytest.fail("Unexpected Quark write endpoint")
+
+    with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
+         patch("drivers.pan.quark.requests.get", side_effect=get) as detail, \
+         patch("drivers.pan.quark.requests.post", side_effect=post) as posts, \
+         patch.object(driver, "_get_or_create_temp_folder", return_value="owned"), \
+         patch.object(driver, "_poll_task_completion", return_value="saved"):
+        package = driver.extract("https://pan.quark.cn/s/demo", password="code")
+    assert driver.API_BASE == "https://drive-h.quark.cn/1/clouddrive"
+    assert events == (["token", "detail", "detail", "save"] if nested else ["token", "detail", "save"])
+    assert posts.call_args_list[0].kwargs["json"] == {"pwd_id": "demo", "passcode": "code"}
+    assert detail.call_args_list[0].kwargs["params"] == {
+        "pr": "ucpro", "fr": "pc", "pwd_id": "demo", "stoken": "share-token",
+        "pdir_fid": "0", "_page": 1, "_size": 50,
+    }
+    parent = "source-folder" if nested else "0"
+    assert detail.call_args.kwargs["params"]["pdir_fid"] == parent
+    assert posts.call_args_list[1].kwargs["json"] == {
+        "pwd_id": "demo", "passcode": "code", "stoken": "share-token",
+        "fid_list": ["source-file"], "fid_token_list": ["file-token"],
+        "to_pdir_fid": "owned", "pdir_fid": parent, "scene": "link",
+    }
+    assert package.assets[0].filename == "first.exe"
+    assert package.context["owned_temp_dir"] == "owned"
+    assert package.assets[0].headers["Cookie"] == "DUMMY"
+
+
+def test_quark_cleanup_uses_current_delete_payload():
+    from drivers.base import AssetPackage
+    driver = QuarkDriver()
+    response = quark_response({"finish": True})
+    package = AssetPackage(title="test", platform="quark", context={
+        "owned_temp_dir": "owned", "headers": {"Cookie": "DUMMY"}})
+    with patch("drivers.pan.quark.requests.post", return_value=response) as post:
+        driver.cleanup(package)
+    assert post.call_args.kwargs["json"] == {
+        "action_type": 1, "filelist": ["owned"], "exclude_fids": []}
+
+
+@pytest.mark.parametrize("token_data,status,error", [
+    ({}, 200, ExtractionError), ({}, 400, CloudDriveError),
+])
+def test_quark_missing_share_token_stops_before_detail(token_data, status, error):
+    driver = QuarkDriver()
+    with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
+         patch("drivers.pan.quark.requests.post", return_value=quark_response(token_data, status)) as post, \
+         patch("drivers.pan.quark.requests.get") as get, \
+         patch.object(driver, "_get_or_create_temp_folder") as create:
+        with pytest.raises(error, match="token"):
+            driver.extract("https://pan.quark.cn/s/demo", inspect_only=True)
+    post.assert_called_once()
+    get.assert_not_called()
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("missing", ["fid", "share_fid_token"])
+def test_quark_missing_file_token_or_fid_never_writes(missing):
+    item = quark_file()
+    del item[missing]
+    driver = QuarkDriver()
+    with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
+         patch("drivers.pan.quark.requests.post", return_value=quark_response({"stoken": "share-token"})) as post, \
+         patch("drivers.pan.quark.requests.get", return_value=quark_response({"list": [item]})), \
+         patch.object(driver, "_get_or_create_temp_folder") as create:
+        with pytest.raises(ExtractionError, match="fid or share_fid_token"):
+            driver.extract("https://pan.quark.cn/s/demo")
+    post.assert_called_once()
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("empty", "No actual files"), ("depth", "depth limit"),
+    ("pages", "pagination limit"), ("requests", "request limit"),
+    ("exhausted", "pagination exhausted"),
+])
+def test_quark_bounded_search_errors_never_write(case, expected):
+    driver = QuarkDriver()
+    driver.SHARE_PAGE_SIZE = 1
+    driver.SHARE_MAX_PAGES = 2
+    driver.SHARE_MAX_DEPTH = 1
+    driver.SHARE_MAX_REQUESTS = 4
+    directory = {"fid": "folder", "dir": True, "file": False}
+    if case == "empty":
+        pages = [quark_response({"list": []})]
+    elif case == "depth":
+        pages = [quark_response({"list": [directory]}), quark_response({"list": []}),
+                 quark_response({"list": [{"fid": "deep", "dir": True}]}),
+                 quark_response({"list": []})]
+    else:
+        pages = [quark_response({"list": [{"dir": False, "file": False}]})] * 2
+        if case == "requests":
+            driver.SHARE_MAX_REQUESTS = 1
+        elif case == "exhausted":
+            pages[1] = quark_response({"list": []})
+    with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
+         patch("drivers.pan.quark.requests.post", return_value=quark_response({"stoken": "share-token"})) as post, \
+         patch("drivers.pan.quark.requests.get", side_effect=pages), \
+         patch.object(driver, "_get_or_create_temp_folder") as create:
+        with pytest.raises(ExtractionError, match=expected):
+            driver.extract("https://pan.quark.cn/s/demo", inspect_only=True)
+    post.assert_called_once()
+    create.assert_not_called()
+
+
+def test_quark_preflight_skips_empty_subdirectory_and_never_writes():
+    driver = QuarkDriver()
+    second_file = dict(quark_file(), fid="second-file", file_name="second.exe",
+                       share_fid_token="second-token")
+    pages = [quark_response({"list": [
+        {"fid": "empty", "dir": True, "file": False},
+        {"fid": "source-folder", "dir": True, "file": False}]}),
+        quark_response({"list": []}),
+        quark_response({"list": [quark_file(), second_file]})]
+    with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
+         patch("drivers.pan.quark.requests.post", return_value=quark_response({"stoken": "share-token"})) as post, \
+         patch("drivers.pan.quark.requests.get", side_effect=pages) as get, \
+         patch.object(driver, "_get_or_create_temp_folder") as create:
+        package = driver.extract("https://pan.quark.cn/s/demo", inspect_only=True)
+    assert package.assets[0].filename == "first.exe"
+    assert package.assets[0].url == ""
+    assert package.metadata["requires_transfer"] is True
+    assert [call.kwargs["params"]["pdir_fid"] for call in get.call_args_list] == [
+        "0", "empty", "source-folder"]
+    post.assert_called_once()
+    assert "/share/sharepage/token?" in post.call_args.args[0]
+    create.assert_not_called()
+
+
+def test_quark_pagination_finds_actual_file_after_empty_directory():
+    driver = QuarkDriver()
+    driver.SHARE_PAGE_SIZE = 1
+    pages = [quark_response({"list": [{"fid": "empty", "dir": True}]}),
+             quark_response({"list": [quark_file()]})]
+    with patch.object(driver, "_get_cookie", return_value="DUMMY"), \
+         patch("drivers.pan.quark.requests.post", return_value=quark_response({"stoken": "share-token"})) as post, \
+         patch("drivers.pan.quark.requests.get", side_effect=pages) as get:
+        package = driver.extract("https://pan.quark.cn/s/demo", inspect_only=True)
+    assert package.assets[0].filename == "first.exe"
+    assert [call.kwargs["params"]["_page"] for call in get.call_args_list] == [1, 2]
+    post.assert_called_once()
+
 
 def test_baidu_driver_can_handle():
     driver = BaiduDriver()

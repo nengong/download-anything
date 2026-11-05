@@ -17,6 +17,7 @@ from drivers.social.youtube import YouTubeDriver
 from drivers.social.twitter import TwitterDriver
 from drivers.social.instagram import InstagramDriver
 from drivers.social.weibo import WeiboDriver
+from drivers.social.ytdlp_fallback import YtDlpFallbackDriver
 from drivers.dev.github_dir import GitHubDirDriver
 from drivers.audio.xiaoyuzhou import XiaoyuzhouDriver
 from drivers.audio.apple_podcasts import ApplePodcastsDriver
@@ -61,4 +62,6 @@ def get_default_drivers() -> List[BaseDriver]:
         MicrosoftStoreDriver(),
         AndroidAPKDriver(),
         ShadowLibraryDriver(),
+        # Last resort: try yt-dlp for video/audio pages no specialized driver claimed.
+        YtDlpFallbackDriver(),
     ]

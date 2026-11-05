@@ -1,12 +1,16 @@
 """
 Sina Weibo Post, Video, and Image Album Extractor Driver
 """
+import json
 import re
+import subprocess
+import sys
+from urllib.parse import urlsplit
 from typing import Optional, Dict, Any, List
 import requests
 from bs4 import BeautifulSoup
 from drivers.base import BaseDriver, AssetPackage, AssetFile
-from core.exceptions import ExtractionError
+from core.exceptions import ExtractionError, BackendUnavailableError, AccessDeniedError
 from core.credentials import credentials_manager
 
 class WeiboDriver(BaseDriver):
@@ -40,6 +44,126 @@ class WeiboDriver(BaseDriver):
             pass
         return ""
 
+    @staticmethod
+    def _access_error(message: str) -> bool:
+        return any(marker in message.lower() for marker in (
+            "login", "log in", "sign in", "auth", "cookie", "token",
+            "401", "403", "429", "rate limit", "too many requests",
+            "forbidden", "captcha", "challenge", "登录", "频繁",
+        ))
+
+    def _extract_photos(self, canonical_url: str, weibo_id: str) -> Optional[AssetPackage]:
+        """Read public gallery-dl metadata without loading user configuration."""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "gallery_dl", "--config-ignore", "--no-input",
+                 "--dump-json", "--retries", "0", "--http-timeout", "15", canonical_url],
+                capture_output=True, text=True, timeout=60, shell=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise BackendUnavailableError("Weibo gallery-dl extraction timed out.") from None
+        except OSError:
+            raise BackendUnavailableError("Could not start Weibo gallery-dl extraction.") from None
+        if self._access_error(result.stderr or ""):
+            raise AccessDeniedError("Weibo authentication/access or rate limit error.")
+        if result.returncode:
+            raise BackendUnavailableError("Weibo gallery-dl extraction failed.")
+        try:
+            messages = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            raise BackendUnavailableError("Invalid Weibo gallery-dl JSON response.") from None
+        if not isinstance(messages, list):
+            raise ExtractionError("Invalid Weibo gallery-dl messages.")
+
+        status = None
+        images = {}
+        seen_urls = {}
+        non_image = False
+        extensions = {"jpg", "jpeg", "png", "webp", "gif"}
+
+        def matches(value):
+            return isinstance(value, dict) and weibo_id in (
+                str(value.get("id", "")), value.get("mblogid"),
+            )
+
+        for message in messages:
+            if not isinstance(message, list) or not message:
+                raise ExtractionError("Invalid Weibo gallery-dl message.")
+            if message[0] == -1:
+                raise ExtractionError("Weibo gallery-dl reported an extraction error.")
+            if message[0] == 2:
+                candidate = message[-1]
+                if not matches(candidate) or status is not None:
+                    raise ExtractionError("Weibo gallery post identity mismatch.")
+                status = candidate
+            elif message[0] == 3:
+                if len(message) != 3 or not isinstance(message[2], dict):
+                    raise ExtractionError("Invalid Weibo gallery image metadata.")
+                image_url, data = message[1:]
+                if (not matches(data.get("status")) or status is None
+                        or data["status"].get("count") != status.get("count")):
+                    raise ExtractionError("Weibo gallery image post identity mismatch.")
+                extension = data.get("extension")
+                if extension not in extensions:
+                    non_image = True
+                    continue
+                if not isinstance(image_url, str):
+                    raise ExtractionError("Unsafe Weibo gallery image URL.")
+                try:
+                    parsed = urlsplit(image_url)
+                    safe = (
+                        parsed.scheme == "https" and parsed.hostname
+                        and parsed.hostname.endswith(".sinaimg.cn")
+                        and parsed.username is None and parsed.password is None
+                        and parsed.port in (None, 443)
+                        and re.fullmatch(r"/large/[A-Za-z0-9_.-]+", parsed.path)
+                        and parsed.path.rsplit(".", 1)[-1].lower() == extension
+                        and not parsed.fragment
+                    )
+                except ValueError:
+                    safe = False
+                if not safe:
+                    raise ExtractionError("Unsafe Weibo gallery image URL.")
+                num = data.get("num")
+                if type(num) is not int or num < 1:
+                    raise ExtractionError("Invalid Weibo gallery image number.")
+                if num in images and images[num] != (image_url, extension):
+                    raise ExtractionError("Conflicting Weibo gallery image number.")
+                if image_url in seen_urls and seen_urls[image_url] != num:
+                    raise ExtractionError("Duplicate Weibo gallery image URL.")
+                images[num] = (image_url, extension)
+                seen_urls[image_url] = num
+        # Never mistake a video's poster or a mixed album for a complete photo post.
+        if non_image or not images:
+            return None
+        count = status.get("count") if status else None
+        if (type(count) is not int or count < 1 or len(images) != count
+                or sorted(images) != list(range(1, count + 1))):
+            raise ExtractionError("Incomplete Weibo gallery image album.")
+        clean_text = BeautifulSoup(str(status.get("text") or ""), "html.parser").get_text(separator="\n").strip()
+        title = clean_text[:60] or f"weibo_{weibo_id}"
+        user = status.get("user") or {}
+        if not isinstance(user, dict):
+            user = {}
+        assets = [
+            AssetFile(
+                filename=f"content.{ext}" if num == 1 else f"image_{num:02d}.{ext}",
+                url=image_url, file_type="primary" if num == 1 else "companion",
+                headers={"Referer": "https://weibo.com"},
+            )
+            for num, (image_url, ext) in sorted(images.items())
+        ]
+        return AssetPackage(
+            platform="weibo", title=title, original_url=canonical_url, assets=assets,
+            metadata={
+                "title": title, "original_url": canonical_url,
+                "author": {"id": str(user.get("id") or ""),
+                           "name": str(user.get("screen_name") or "Weibo User")},
+                "created_at": str(status.get("date") or ""),
+                "sidecar_text": clean_text, "image_count": count,
+            },
+        )
+
     def extract(self, url: str, password: Optional[str] = None, **kwargs) -> AssetPackage:
         m = self.WEIBO_URL_REGEX.search(url)
         if not m:
@@ -63,17 +187,30 @@ class WeiboDriver(BaseDriver):
         # Try mobile detail API
         detail_url = f"https://m.weibo.cn/statuses/show?id={weibo_id}"
         post_data = None
+        access_error = False
         try:
             r = session.get(detail_url, headers=headers, timeout=10)
-            if r.status_code == 200:
+            if r.status_code in (401, 403, 429):
+                access_error = True
+            elif r.status_code == 200:
                 json_data = r.json()
                 if json_data.get("ok") == 1:
                     post_data = json_data.get("data")
+                else:
+                    access_error = self._access_error(str(json_data.get("msg") or ""))
         except Exception:
             pass
+        if access_error:
+            raise AccessDeniedError("Weibo authentication/access or rate limit error.")
 
-        # If mobile detail API failed, try yt-dlp fallback for video
+        # Prefer photo extraction before the existing video fallback.
         if not post_data:
+            try:
+                photos = self._extract_photos(canonical_url, weibo_id)
+            except BackendUnavailableError:
+                photos = None
+            if photos is not None:
+                return photos
             try:
                 import yt_dlp
                 ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}

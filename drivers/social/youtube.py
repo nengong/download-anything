@@ -3,11 +3,12 @@ YouTube Video / Shorts / Audio Extractor Driver
 Powered by yt-dlp metadata engine, conforming to DA micro-asset specifications.
 """
 import re
-from typing import Optional, Dict, Any, List
-from drivers.base import BaseDriver, AssetPackage, AssetFile
+from typing import Optional
+from drivers.base import AssetPackage, AssetFile
+from drivers.social.ytdlp_fallback import YtDlpFallbackDriver
 from core.exceptions import ExtractionError
 
-class YouTubeDriver(BaseDriver):
+class YouTubeDriver(YtDlpFallbackDriver):
     """Driver for extracting YouTube videos, shorts, high-res thumbnails and subtitles."""
 
     YOUTUBE_URL_REGEX = re.compile(
@@ -34,6 +35,8 @@ class YouTubeDriver(BaseDriver):
             "no_warnings": True,
             "extract_flat": False,
             "skip_download": True,
+            "noplaylist": True,
+            "socket_timeout": 15,
         }
 
         try:
@@ -51,67 +54,30 @@ class YouTubeDriver(BaseDriver):
         thumbnail_url = info.get("thumbnail")
         duration = info.get("duration")
 
-        # Select stream
-        formats = info.get("formats", [])
-        chosen_format = None
-        progressive_mp4s = []
-        audio_only = kwargs.get("audio_only", False)
-
-        if audio_only:
-            audio_formats = [
-                f for f in formats
-                if f.get("acodec") != "none" and (f.get("vcodec") == "none" or not f.get("vcodec"))
-            ]
-            if audio_formats:
-                audio_formats.sort(key=lambda x: (x.get("abr") or 0, x.get("tbr") or 0), reverse=True)
-                for f in audio_formats:
-                    size = f.get("filesize") or f.get("filesize_approx") or 0
-                    if size <= 500 * 1024 * 1024 and f.get("url"):
-                        chosen_format = f
-                        break
-
-        # 1. Prefer formats that have both audio and video (progressive MP4)
-        if not chosen_format:
-            progressive_mp4s = [
-                f for f in formats 
-                if f.get("vcodec") != "none" and f.get("acodec") != "none" and f.get("ext") == "mp4"
-            ]
-        if progressive_mp4s:
-            # Sort by height / bitrate descending
-            progressive_mp4s.sort(key=lambda x: (x.get("height") or 0, x.get("tbr") or 0), reverse=True)
-            for f in progressive_mp4s:
-                size = f.get("filesize") or f.get("filesize_approx") or 0
-                if size <= 500 * 1024 * 1024:
-                    chosen_format = f
-                    break
-
-        # 2. Fallback to best available video format
-        if not chosen_format and formats:
-            video_formats = [f for f in formats if f.get("vcodec") != "none"]
-            video_formats.sort(key=lambda x: (x.get("height") or 0, x.get("tbr") or 0), reverse=True)
-            for f in video_formats:
-                size = f.get("filesize") or f.get("filesize_approx") or 0
-                if size <= 500 * 1024 * 1024 and f.get("url"):
-                    chosen_format = f
-                    break
-
-        if not chosen_format and formats:
-            chosen_format = formats[-1]
-
-        if not chosen_format or not chosen_format.get("url"):
+        # Let yt-dlp select, download and merge tracks rather than fetching a
+        # single resolved URL (which may contain video without audio).
+        formats = [f for f in (info.get("formats") or []) if f.get("url")]
+        if not formats and not info.get("url"):
             raise ExtractionError("Could not resolve downloadable stream URL for YouTube video.")
 
-        primary_url = chosen_format["url"]
-        expected_size = chosen_format.get("filesize") or chosen_format.get("filesize_approx")
-        ext = chosen_format.get("ext") or "mp4"
+        audio_only = bool(kwargs.get("audio_only", False))
+        ext = self._native_audio_ext(info) if audio_only else "mp4"
+        download_options = {
+            "source_url": canonical_url,
+            "format": "ba/b" if audio_only else "bv*+ba/b",
+        }
+        if not audio_only:
+            download_options["merge_output_format"] = "mp4"
 
         assets = [
             AssetFile(
                 filename=f"content.{ext}",
-                url=primary_url,
+                url=canonical_url,
                 file_type="primary",
-                expected_size=expected_size,
-                headers={"User-Agent": "Mozilla/5.0"}
+                expected_size=None,
+                headers={"User-Agent": "Mozilla/5.0"},
+                download_strategy="ytdlp",
+                download_options=download_options,
             )
         ]
 

@@ -41,6 +41,6 @@ def test_fetcher_file_uri_size_guard(tmp_path):
     source.write_bytes(b"x" * 11)
     dest = tmp_path / "dest.txt"
     with pytest.raises(FileTooLargeError, match="exceeds maximum allowed limit"):
-        fetcher.download(source.as_uri(), dest)
+        fetcher.download(source.as_uri(), dest, local_source=source)
     assert not dest.exists()
     assert source.read_bytes() == b"x" * 11

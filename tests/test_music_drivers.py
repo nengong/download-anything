@@ -22,7 +22,7 @@ from drivers.audio.spotify_apple import SpotifyAppleMusicDriver
 from drivers.audio.open_music import OpenMusicDriver
 from drivers.audio.local_audio import LocalAudioDriver
 
-def _create_synthetic_ncm(out_path: Path):
+def _create_synthetic_ncm(out_path: Path, audio_payload=None, audio_format="mp3"):
     with open(out_path, "wb") as f:
         # Magic
         f.write(b"CTENFDAM")
@@ -40,33 +40,61 @@ def _create_synthetic_ncm(out_path: Path):
         f.write(struct.pack("<I", len(enc_key)))
         f.write(enc_key)
         
-        # Meta
+        # Meta (real NCM layout: XOR -> "163 key..." prefix -> base64 -> AES)
         meta_dict = {
             "musicName": "晴天 (Live)",
             "artist": [["周杰伦", 6452]],
             "album": "叶惠美",
-            "format": "mp3"
+            "format": audio_format
         }
-        b64_meta = base64.b64encode(json.dumps(meta_dict).encode("utf-8"))
-        raw_meta = b"163 key(Don't modify):" + b64_meta
+        raw_meta = b"music:" + json.dumps(meta_dict).encode("utf-8")
         pad2 = 16 - (len(raw_meta) % 16)
         raw_meta += bytes([pad2] * pad2)
         cipher2 = Cipher(algorithms.AES(MusicUnlocker.NCM_META_KEY), modes.ECB())
         enc2 = cipher2.encryptor()
-        enc_meta = bytearray(enc2.update(raw_meta) + enc2.finalize())
+        enc_meta = b"163 key(Don't modify):" + base64.b64encode(enc2.update(raw_meta) + enc2.finalize())
+        enc_meta = bytearray(enc_meta)
         for i in range(len(enc_meta)):
             enc_meta[i] ^= 0x63
         f.write(struct.pack("<I", len(enc_meta)))
         f.write(enc_meta)
         
         # Gap & CRC
-        f.write(b"\x00" * 9)
+        f.write(b"\x00" * 5)
         # Img space & len
         f.write(struct.pack("<I", 0))
         f.write(struct.pack("<I", 0))
         
         # Audio stream
-        f.write(b"\x42" * 512)
+        if audio_payload is None:
+            f.write(b"\x42" * 512)
+        else:
+            # Reference per-byte NCM cipher; production uses a precomputed mask.
+            key = b"test_secret_rc4_key"
+            box = list(range(256))
+            last = 0
+            for index in range(256):
+                last = (box[index] + last + key[index % len(key)]) & 255
+                box[index], box[last] = box[last], box[index]
+            encrypted = bytearray(audio_payload)
+            for offset in range(len(encrypted)):
+                j = (offset + 1) & 255
+                encrypted[offset] ^= box[(box[j] + box[(box[j] + j) & 255]) & 255]
+            f.write(encrypted)
+
+
+@pytest.mark.parametrize("audio_format", ["mp3", "flac"])
+def test_ncm_decryption_preserves_real_playable_audio(tmp_path, media_samples, audio_format):
+    from core.verifier import Verifier
+    source = tmp_path / "real.ncm"
+    payload = media_samples["." + audio_format]
+    _create_synthetic_ncm(source, audio_payload=payload, audio_format=audio_format)
+    with patch.object(MusicUnlocker, "_embed_mp3_metadata", return_value=False), \
+         patch.object(MusicUnlocker, "transcode_to_mp3", return_value=False):
+        audio, _, metadata = MusicUnlocker.unlock_ncm(source, tmp_path / "decoded")
+    assert metadata["format"] == audio_format
+    assert audio.read_bytes() == payload
+    assert Verifier.verify(audio).valid
 
 def test_music_unlocker_ncm_decrypt():
     with tempfile.TemporaryDirectory() as td:

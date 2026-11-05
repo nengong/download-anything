@@ -22,7 +22,7 @@ jobs:
           choco install ffmpeg -y
           echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
       - run: python -m pip install '.[dev]'
-      - run: python -m pytest -q
+      - run: python -m pytest -q tests
       - run: python scripts/build_release.py
       - name: Install bundled Skill outside the checkout (Linux)
         if: runner.os == 'Linux'

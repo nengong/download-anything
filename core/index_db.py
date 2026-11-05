@@ -46,6 +46,9 @@ class AssetIndexDB:
                         created_at TEXT
                     )
                 """)
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(asset_index)")}
+                if "manifest_json" not in columns:
+                    conn.execute("ALTER TABLE asset_index ADD COLUMN manifest_json TEXT")
             with conn:
                 yield conn
         finally:
@@ -78,6 +81,11 @@ class AssetIndexDB:
                 )
                 row = cur.fetchone()
                 if row and cls._compute_key(row["original_url"], variant=variant) == key:
+                    if row["manifest_json"]:
+                        manifest = json.loads(row["manifest_json"])
+                        if any(not Path(item["path"]).is_file()
+                               or Path(item["path"]).stat().st_size != item["size"] for item in manifest):
+                            return None
                     primary_path = Path(row["primary_file"])
                     # Check if file still exists on disk and is non-empty
                     if primary_path.is_file() and primary_path.stat().st_size == row["size_bytes"] and row["size_bytes"] > 0:
@@ -119,6 +127,7 @@ class AssetIndexDB:
         size_bytes: int,
         sidecars: Optional[Dict[str, str]] = None,
         variant: str = "default",
+        manifest: Optional[list] = None,
     ):
         """Save a successful download to the index."""
         key = cls._compute_key(url, variant=variant)
@@ -141,12 +150,12 @@ class AssetIndexDB:
                 conn.execute("""
                     INSERT OR REPLACE INTO asset_index (
                         url_key, original_url, title, platform, output_dir, primary_file,
-                        size_bytes, sha256, sidecars_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        size_bytes, sha256, sidecars_json, created_at, manifest_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     key, url, title, platform, str(output_dir.resolve()),
                     str(primary_file.resolve()), size_bytes, sha256_hash,
-                    sidecars_str, now
+                    sidecars_str, now, json.dumps(manifest) if manifest is not None else None
                 ))
         except Exception:
             pass

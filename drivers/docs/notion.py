@@ -9,6 +9,7 @@ import re
 from typing import Optional, List, Dict, Any
 from urllib.parse import urljoin, urlparse
 import requests
+from core.url_policy import is_http_url, require_http_url
 from bs4 import BeautifulSoup
 
 from core.exceptions import ExtractionError, AuthenticationRequiredError
@@ -33,10 +34,7 @@ class NotionPublicDriver(BaseDriver):
     }
 
     def can_handle(self, url: str) -> bool:
-        clean = url.strip().lower()
-        if "notion.site" in clean or "notion.so" in clean:
-            return True
-        return False
+        return is_http_url(url, ("notion.site", "notion.so"))
 
     def extract(self, url: str, **kwargs) -> AssetPackage:
         clean = url.strip()
@@ -52,6 +50,7 @@ class NotionPublicDriver(BaseDriver):
             )
             if resp.status_code in (401, 403) or is_login_redirect:
                 raise AuthenticationRequiredError(f"Notion page is private or requires login: {url}")
+            resp.raise_for_status()
             html = resp.text
         except AuthenticationRequiredError:
             raise
@@ -84,7 +83,7 @@ class NotionPublicDriver(BaseDriver):
             src = img.get("src")
             if not src or src.startswith("data:"):
                 continue
-            full_url = urljoin(url, src)
+            full_url = require_http_url(urljoin(resp.url, src))
             img_filename = f"notion_img_{img_counter:02d}.png"
             assets.append(TargetAsset(
                 filename=img_filename,

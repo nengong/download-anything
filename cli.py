@@ -23,13 +23,14 @@ from core.exceptions import DAError, VerificationError
 from core.fetcher import Fetcher, FetcherOptions
 from core.router import Router
 from core.sidecar import SidecarWriter
-from core.verifier import Verifier, detect_audio_container
+from core.verifier import Verifier, detect_audio_container, detect_ebook_format
 from core.unpacker import Unpacker
 from core.index_db import AssetIndexDB
 from core.vault_sync import VaultSync
 from core.transcriber import CloudTranscriber
 from core.music_unlocker import MusicUnlocker
 from core.path_resolver import resolve_output_directory, resolve_asset_path, sanitize_filename, get_system_downloads_dir
+from core.path_resolver import create_task_directory, reserve_asset_path
 from drivers import get_default_drivers
 from drivers.base import AssetPackage, TargetAsset
 
@@ -38,34 +39,27 @@ err_console = Console(stderr=True)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".avi", ".flv", ".mov", ".ts", ".m4v"}
 
-def _extract_audio_from_video(video_path: Path) -> Optional[Path]:
-    """Extract audio track from video file using ffmpeg."""
+def _extract_audio_from_video(video_path: Path, reserved_names=None) -> Optional[Path]:
+    """Extract in scratch space, then publish without replacing another asset."""
+    import tempfile
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return None
-
-    # 1. Try lossless copy to .m4a
-    audio_path = video_path.with_suffix(".m4a")
-    cmd = [ffmpeg, "-y", "-i", str(video_path), "-vn", "-c:a", "copy", str(audio_path)]
-    try:
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        if res.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 1024:
-            video_path.unlink(missing_ok=True)
-            return audio_path
-    except Exception:
-        pass
-
-    # 2. Fallback to high-quality MP3 re-encoding
-    audio_path = video_path.with_suffix(".mp3")
-    cmd = [ffmpeg, "-y", "-i", str(video_path), "-vn", "-b:a", "192k", str(audio_path)]
-    try:
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
-        if res.returncode == 0 and audio_path.exists() and audio_path.stat().st_size > 1024:
-            video_path.unlink(missing_ok=True)
-            return audio_path
-    except Exception:
-        pass
-
+    with tempfile.TemporaryDirectory(prefix=".da-audio-", dir=video_path.parent) as scratch:
+        for ext, codec, timeout in ((".m4a", ["-c:a", "copy"], 60),
+                                    (".mp3", ["-b:a", "192k"], 90)):
+            temporary = Path(scratch) / ("audio" + ext)
+            cmd = [ffmpeg, "-n", "-i", str(video_path), "-vn", *codec, str(temporary)]
+            try:
+                res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+                if res.returncode == 0 and temporary.is_file() and temporary.stat().st_size > 1024:
+                    target = reserve_asset_path(video_path.parent, video_path.stem + ext,
+                                                reserved_names if reserved_names is not None else set())
+                    os.link(temporary, target)
+                    video_path.unlink(missing_ok=True)
+                    return target
+            except (OSError, subprocess.SubprocessError):
+                continue
     return None
 
 def process_download(
@@ -92,11 +86,13 @@ def process_download(
     # A pure download cache hit must not suppress explicitly requested post-processing.
     base_variant = "audio-only" if audio_only else "default"
     cache_variant = f"{base_variant}:lang={lang.strip().lower()}" if lang and lang.strip() else base_variant
+    cache_variant += f":delivery-v2:unzip={int(auto_unzip)}:sidecar={int(not no_sidecar)}"
     has_postprocessing = bool(
         transcribe
         or notion
         or vault
         or output_dir
+        or os.getenv("DA_OUTPUT_DIR")
         or os.getenv("OBSIDIAN_VAULT_PATH")
         or os.getenv("DA_VAULT_PATH")
     )
@@ -129,6 +125,7 @@ def process_download(
         password=clean_input.password,
         audio_only=audio_only,
         inspect_only=check,
+        max_bytes=max_mb * 1024 * 1024,
         preferred_lang=lang,
         lang=lang
     )
@@ -150,15 +147,15 @@ def process_download(
                     "filename": primary_asset.filename,
                     "url": primary_asset.url,
                     "expected_size": primary_asset.expected_size,
-                    "file_type": primary_asset.file_type
+                    "file_type": primary_asset.file_type,
+                    "download_strategy": primary_asset.download_strategy
                 },
                 "total_assets": len(package.assets),
                 "metadata": package.metadata
             }
 
         # Resolve output directory
-        base_dir = resolve_output_directory(output_dir, title=package.title, create_subfolder=True)
-        base_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = create_task_directory(resolve_output_directory(output_dir, title=package.title, create_subfolder=True))
 
         # Smart file naming
         clean_title = sanitize_filename(package.title, max_length=70)
@@ -172,8 +169,25 @@ def process_download(
             primary_asset.filename.startswith("video.") or
             (len(primary_asset.filename) > 0 and primary_asset.filename[0].isdigit())
         )
-        if is_generic_name and clean_title and clean_title != "untitled_asset":
+        is_document = package.platform in {"wechat", "web_article", "feishu_doc", "notion_public"}
+        if is_generic_name and not is_document and clean_title and clean_title != "untitled_asset":
             primary_asset.filename = f"{clean_title}{raw_ext}"
+
+        # Keep document attachment names stable: their Markdown already links to them.
+        # Reserve every output up front so companions can never overwrite the primary.
+        reserved_names = set()
+        planned_paths = {}
+        for asset in [primary_asset] + [a for a in package.assets if a is not primary_asset]:
+            if asset is not primary_asset and asset.file_type == "primary":
+                raise DAError("Multiple primary assets require separate download tasks")
+            ext = Path(asset.filename).suffix
+            if not is_document and asset.file_type in ("cover", "subtitle"):
+                role = asset.file_type
+                default_ext = ".jpg" if role == "cover" else ".srt"
+                asset.filename = f"{clean_title}.{role}{ext or default_ext}"
+            path = reserve_asset_path(base_dir, asset.filename, reserved_names)
+            asset.filename = str(path.relative_to(base_dir.resolve()))
+            planned_paths[id(asset)] = path
 
         fetcher = Fetcher(FetcherOptions(
             max_bytes=max_mb * 1024 * 1024,
@@ -181,10 +195,31 @@ def process_download(
             inactivity_timeout=45
         ))
 
-        dest_file = resolve_asset_path(base_dir, primary_asset.filename)
+        dest_file = planned_paths[id(primary_asset)]
         primary_asset.filename = str(dest_file.relative_to(base_dir.resolve()))
 
         # Fetch Primary Asset
+        def fetch_primary(progress_callback=None):
+            if primary_asset.download_strategy == "ytdlp":
+                return driver.download_primary(
+                    primary_asset,
+                    dest_file,
+                    max_bytes=max_mb * 1024 * 1024,
+                    progress_callback=progress_callback,
+                )
+            return (
+                fetcher.download(
+                    url=primary_asset.url,
+                    dest_path=dest_file,
+                    headers=primary_asset.headers,
+                    expected_size=primary_asset.expected_size,
+                    progress_callback=progress_callback,
+                    **({"cookie_jar": primary_asset.cookie_jar} if primary_asset.cookie_jar is not None else {}),
+                    **({"local_source": primary_asset.local_source} if primary_asset.local_source is not None else {}),
+                ),
+                dest_file,
+            )
+
         if not agent_mode:
             with Progress(
                 TextColumn("[bold blue]{task.fields[filename]}", justify="left"),
@@ -209,20 +244,37 @@ def process_download(
                         progress.update(task_id, total=total)
                     progress.update(task_id, completed=current)
 
-                downloaded_size = fetcher.download(
-                    url=primary_asset.url,
-                    dest_path=dest_file,
-                    headers=primary_asset.headers,
-                    expected_size=primary_asset.expected_size,
-                    progress_callback=update_progress
-                )
+                downloaded_size, final_path = fetch_primary(update_progress)
         else:
-            downloaded_size = fetcher.download(
-                url=primary_asset.url,
-                dest_path=dest_file,
-                headers=primary_asset.headers,
-                expected_size=primary_asset.expected_size
-            )
+            downloaded_size, final_path = fetch_primary()
+
+        # yt-dlp may produce a different container than the declared extension.
+        if final_path != dest_file:
+            if final_path in [path for key, path in planned_paths.items() if key != id(primary_asset)]:
+                safe_path = reserve_asset_path(base_dir, final_path.name, reserved_names)
+                os.link(final_path, safe_path)
+                final_path.unlink()
+                final_path = safe_path
+            dest_file = final_path
+            primary_asset.filename = str(dest_file.relative_to(base_dir.resolve()))
+
+        # Shadow-library metadata can omit or mislabel the ebook container.
+        if package.platform == "shadow_library":
+            ebook_format = detect_ebook_format(dest_file)
+            if ebook_format:
+                if dest_file.suffix != f".{ebook_format}":
+                    corrected_name = str(Path(primary_asset.filename).with_suffix(f".{ebook_format}"))
+                    corrected_path = reserve_asset_path(base_dir, corrected_name, reserved_names)
+                    try:
+                        # An exclusive hard link avoids replacing an existing target,
+                        # including one created concurrently after path resolution.
+                        os.link(dest_file, corrected_path)
+                    except FileExistsError as exc:
+                        raise DAError(f"Cannot correct ebook extension: target already exists: {corrected_path}") from exc
+                    dest_file.unlink()
+                    dest_file = corrected_path
+                primary_asset.filename = str(dest_file.relative_to(base_dir.resolve()))
+                package.metadata["extension"] = ebook_format
 
         primary_asset.local_path = dest_file
         primary_asset.downloaded_bytes = downloaded_size
@@ -234,22 +286,21 @@ def process_download(
         for companion in package.assets:
             if companion is primary_asset or companion.file_type == "primary":
                 continue
-            comp_ext = Path(companion.filename).suffix
             if companion.file_type == "cover":
-                companion.filename = f"{clean_title}.cover{comp_ext or '.jpg'}" if clean_title != "untitled_asset" else "cover.jpg"
                 cover_filename = companion.filename
             elif companion.file_type == "subtitle":
-                companion.filename = f"{clean_title}.subtitle{comp_ext or '.srt'}" if clean_title != "untitled_asset" else "subtitle.srt"
                 subtitle_filename = companion.filename
 
-            comp_dest = resolve_asset_path(base_dir, companion.filename)
+            comp_dest = planned_paths[id(companion)]
             companion.filename = str(comp_dest.relative_to(base_dir.resolve()))
             try:
                 fetcher.download(
                     url=companion.url,
                     dest_path=comp_dest,
                     headers=companion.headers,
-                    expected_size=companion.expected_size
+                    expected_size=companion.expected_size,
+                    **({"cookie_jar": companion.cookie_jar} if companion.cookie_jar is not None else {}),
+                    **({"local_source": companion.local_source} if companion.local_source is not None else {}),
                 )
                 companion_verification = Verifier.verify(comp_dest, expected_size=companion.expected_size)
                 if not companion_verification.valid:
@@ -258,6 +309,7 @@ def process_download(
                 if companion.file_type not in ("cover", "subtitle") and comp_dest.exists():
                     companion_files.append(str(comp_dest.resolve()))
             except Exception as e:
+                comp_dest.unlink(missing_ok=True)
                 warnings.append({"stage": "companion", "asset": companion.filename,
                                  "error_type": type(e).__name__, "message": str(e)})
                 if companion.file_type == "cover":
@@ -271,7 +323,7 @@ def process_download(
         if audio_only and dest_file.suffix.lower() in VIDEO_EXTENSIONS:
             if not agent_mode:
                 console.print("[dim cyan]🎵 提取纯音频流中 (FFmpeg)...[/dim cyan]")
-            extracted_audio = _extract_audio_from_video(dest_file)
+            extracted_audio = _extract_audio_from_video(dest_file, reserved_names)
             if extracted_audio and extracted_audio.exists():
                 dest_file = extracted_audio
                 primary_asset.filename = dest_file.name
@@ -291,8 +343,9 @@ def process_download(
                 h16 = f_head.read(16)
             container = detect_audio_container(h16)
             if container and container != "mp3":
-                tmp_raw = dest_file.with_suffix(".raw_audio")
-                dest_file.replace(tmp_raw)
+                tmp_raw = reserve_asset_path(base_dir, dest_file.stem + ".raw_audio", reserved_names)
+                os.link(dest_file, tmp_raw)
+                dest_file.unlink()
                 cover_p = (base_dir / cover_filename) if cover_filename and (base_dir / cover_filename).exists() else None
                 if MusicUnlocker.transcode_to_mp3(tmp_raw, dest_file, cover_path=cover_p, metadata={"title": package.title}):
                     tmp_raw.unlink(missing_ok=True)
@@ -302,8 +355,9 @@ def process_download(
                 else:
                     # Preserve a playable asset with its real extension instead of mislabeling it as MP3.
                     dest_file.unlink(missing_ok=True)
-                    dest_file = dest_file.with_suffix(f".{container}")
-                    tmp_raw.replace(dest_file)
+                    dest_file = reserve_asset_path(base_dir, dest_file.with_suffix(f".{container}").name, reserved_names)
+                    os.link(tmp_raw, dest_file)
+                    tmp_raw.unlink()
                     primary_asset.filename = dest_file.name
                     primary_asset.local_path = dest_file
 
@@ -460,6 +514,10 @@ def process_download(
                     url=clean_input.url, platform=package.platform, title=package.title,
                     output_dir=base_dir, primary_file=dest_file, size_bytes=downloaded_size,
                     sidecars=sidecar_dict, variant=cache_variant,
+                    manifest=[{"path": str(path.resolve()), "size": path.stat().st_size}
+                              for path in {dest_file, *extracted_files, *sidecar_paths.values(),
+                                           *(a.local_path for a in package.assets if a.local_path is not None)}
+                              if path.is_file()],
                 )
 
 
@@ -849,13 +907,60 @@ def _handle_login(platform: str, agent_mode: bool = False) -> bool:
         )
 
 
+def _doctor_failure_lines(report: Dict[str, Any]) -> List[str]:
+    """Build actionable hints for an environment that failed required checks."""
+    lines = []
+    if not report["python_version"]["ok"]:
+        lines.append(
+            "[bold red]Python 版本过低，--fix 无法修复解释器。[/bold red]\n"
+            "请先安装 Python 3.10 或更高版本：\n[cyan]%s[/cyan]"
+            % report["python_version"].get("install_hint", "https://www.python.org/downloads/")
+        )
+    missing_deps = [
+        item["pip_name"].split(">=")[0]
+        for item in report["dependencies"].values()
+        if item.get("required", True) and not item["installed"]
+    ]
+    if missing_deps:
+        lines.append(
+            "[bold yellow]缺少 Python 依赖：%s[/bold yellow]\n"
+            "运行 [bold green]da doctor --fix[/bold green] 自动补全（官方源超时会切换国内镜像），\n"
+            "或在当前目录运行 [cyan]uv pip install -e .[/cyan] / [cyan]pip install -e .[/cyan]。"
+            % ", ".join(missing_deps)
+        )
+    missing_tools = [
+        name for name, item in report["external_tools"].items()
+        if item.get("required", True) and not item["installed"]
+    ]
+    if missing_tools:
+        lines.append(
+            "[bold red]缺少必需的外部工具：%s[/bold red]\n"
+            "请安装后重开终端，再运行 da doctor 确认。" % ", ".join(missing_tools)
+        )
+    if not lines:
+        lines.append(
+            "[bold red]环境检查未通过。[/bold red]\n"
+            "请运行 da doctor --json 查看具体缺失项。"
+        )
+    return lines
+
+
 def _handle_doctor(subtarget: Optional[str], agent_mode: bool, fix: bool = False):
     """Diagnose Python environment, dependencies, and external utilities."""
     from core.doctor import Doctor
     if fix or (subtarget in ("--fix", "-f")) or ("--fix" in sys.argv):
-        if not agent_mode:
-            console.print("[bold yellow]正在自动修复缺失的 Python 依赖包...[/bold yellow]")
-        Doctor.auto_repair(capture_output=agent_mode)
+        if sys.version_info < (3, 10):
+            if not agent_mode:
+                console.print(Panel(
+                    "[bold red]当前 Python %s 低于 3.10，da doctor --fix 无法修复解释器本身。[/bold red]\n"
+                    "请重新运行 Skill 中的安装脚本，或先安装新版 Python：\n[cyan]%s[/cyan]"
+                    % (".".join(map(str, sys.version_info[:3])), Doctor.python_install_hint()),
+                    border_style="red"
+                ))
+        else:
+            if not agent_mode:
+                console.print("[bold yellow]正在自动修复缺失的 Python 依赖包...[/bold yellow]")
+            Doctor.auto_repair(capture_output=agent_mode)
 
     report = Doctor.check_all()
     if agent_mode:
@@ -886,15 +991,31 @@ def _handle_doctor(subtarget: Optional[str], agent_mode: bool, fix: bool = False
     console.print(table)
     if not report["all_required_ok"]:
         console.print(Panel(
-            "[bold yellow]检测到有缺失的核心依赖！[/bold yellow]\n"
-            "你可以直接运行 [bold green]da doctor --fix[/bold green] 一键全自动补全安装，\n"
-            "或者在当前目录运行: [cyan]uv pip install -e .[/cyan] 或 [cyan]pip install -e .[/cyan]",
+            "\n\n".join(_doctor_failure_lines(report)),
             border_style="yellow"
         ))
         sys.exit(1)
+
+    media_missing = [
+        name for name in ("ffmpeg", "ffprobe")
+        if not report["external_tools"][name]["installed"]
+    ]
+    if media_missing:
+        ffmpeg = report["external_tools"]["ffmpeg"]
+        console.print(Panel(
+            "[bold yellow]FFmpeg / ffprobe 未安装（可选组件）[/bold yellow]\n"
+            "只影响音视频：抽轨、转码、流合并，以及音视频下载后的完整性校验。\n"
+            "文档、论文、电子书、图片、网盘和网页下载不受影响，可以照常使用。\n"
+            "需要音视频时再安装即可：[cyan]%s[/cyan]\n"
+            "安装后重开终端，再运行 da doctor 确认。"
+            % ffmpeg.get("install_hint", "https://ffmpeg.org/download.html"),
+            title="音视频可选组件",
+            border_style="yellow"
+        ))
+        console.print("[bold green]✔ 核心环境与依赖均已就绪[/bold green]，[yellow]仅音视频功能暂不可用（缺少 FFmpeg）。[/yellow]")
     else:
         console.print("[bold green]✔ 所有核心环境与依赖均已就绪，运行状态良好！[/bold green]")
-        sys.exit(0)
+    sys.exit(0)
 
 
 def _handle_error(err: Exception, agent_mode: bool):

@@ -6,6 +6,10 @@ import json
 import math
 import shutil
 import subprocess
+import posixpath
+import xml.etree.ElementTree as ET
+from urllib.parse import unquote, urlsplit
+from bs4 import BeautifulSoup
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -35,6 +39,33 @@ def detect_audio_container(head: bytes) -> Optional[str]:
     if head.startswith(b"RIFF") and b"WAVE" in head[:16]:
         return "wav"
     return None
+
+
+def detect_ebook_format(path: Path) -> Optional[str]:
+    """Inspect ebook signatures without changing the file or trusting its suffix."""
+    try:
+        with path.open("rb") as source:
+            if source.read(5) == b"%PDF-":
+                return "pdf"
+        with zipfile.ZipFile(path) as archive:
+            marker = archive.getinfo("mimetype")
+            if marker.file_size == len(b"application/epub+zip") and archive.read(marker) == b"application/epub+zip":
+                return "epub"
+    except (OSError, KeyError, ValueError, RuntimeError, zipfile.BadZipFile, NotImplementedError):
+        pass
+    return None
+
+
+def _epub_member_path(base: str, reference: str) -> str:
+    """Resolve an EPUB URL relative to a ZIP member, never outside the archive."""
+    url = urlsplit(reference)
+    path = unquote(url.path)
+    if not path or url.scheme or url.netloc or "\\" in path or "\x00" in path or path.startswith("/"):
+        raise ValueError(f"Unsafe EPUB reference: {reference}")
+    normalized = posixpath.normpath(posixpath.join(base, path))
+    if normalized in (".", "..") or normalized.startswith("../"):
+        raise ValueError(f"EPUB reference escapes archive root: {reference}")
+    return normalized
 
 
 class Verifier:
@@ -180,6 +211,9 @@ class Verifier:
                     return VerificationResult(False, "archive_limit_exceeded", size,
                                               "Archive exceeds the unpacked size or member limit")
                 if any(m.flag_bits & 1 for m in members):
+                    if is_epub:
+                        return VerificationResult(False, "invalid_epub", size,
+                                                  "Encrypted EPUB members cannot be verified")
                     return VerificationResult(True, "zip", size,
                                               details={"level": "encrypted-container", "crc_checked": False})
                 bad_file = zf.testzip()
@@ -192,19 +226,11 @@ class Verifier:
                     )
                 names = zf.namelist()
                 if is_epub:
-                    if "META-INF/container.xml" not in names and "mimetype" not in names:
-                        return VerificationResult(
-                            valid=False,
-                            detected_type="invalid_epub",
-                            size_bytes=size,
-                            error_message="Archive is valid ZIP but lacks EPUB container markers"
-                        )
-                    return VerificationResult(
-                        valid=True,
-                        detected_type="epub",
-                        size_bytes=size,
-                        details={"file_count": len(names)}
-                    )
+                    try:
+                        details = cls._verify_epub_contents(zf)
+                    except (ValueError, KeyError, ET.ParseError) as exc:
+                        return VerificationResult(False, "invalid_epub", size, str(exc))
+                    return VerificationResult(True, "epub", size, details=details)
                 return VerificationResult(
                     valid=True,
                     detected_type="zip",
@@ -218,6 +244,77 @@ class Verifier:
                 size_bytes=size,
                 error_message=f"ZIP verification failed: {e}"
             )
+
+    @classmethod
+    def _verify_epub_contents(cls, archive: zipfile.ZipFile) -> Dict[str, Any]:
+        member_names = set(archive.namelist())
+        if archive.read("mimetype") != b"application/epub+zip":
+            raise ValueError("Invalid EPUB mimetype")
+        container_ns = "{urn:oasis:names:tc:opendocument:xmlns:container}"
+        opf_ns = "{http://www.idpf.org/2007/opf}"
+        dc_ns = "{http://purl.org/dc/elements/1.1/}"
+        container = ET.fromstring(archive.read("META-INF/container.xml"))
+        if container.tag != f"{container_ns}container":
+            raise ValueError("Invalid EPUB container root")
+        rootfiles = container.findall(f"{container_ns}rootfiles/{container_ns}rootfile")
+        rootfile = next((item for item in rootfiles
+                         if item.get("media-type") == "application/oebps-package+xml"), None)
+        if rootfile is None:
+            raise ValueError("EPUB container has no OPF rootfile")
+        opf_path = _epub_member_path("", rootfile.get("full-path", ""))
+        opf = ET.fromstring(archive.read(opf_path))
+        if opf.tag != f"{opf_ns}package":
+            raise ValueError("Invalid EPUB OPF package root")
+        manifest = opf.findall(f"{opf_ns}manifest/{opf_ns}item")
+        spine = opf.findall(f"{opf_ns}spine/{opf_ns}itemref")
+        if not manifest or not spine:
+            raise ValueError("EPUB manifest and spine must be non-empty")
+        items = {}
+        for item in manifest:
+            item_id = item.get("id")
+            if not item_id or item_id in items:
+                raise ValueError("Missing or duplicate EPUB manifest ID")
+            member = _epub_member_path(posixpath.dirname(opf_path), item.get("href", ""))
+            if member not in member_names:
+                raise ValueError(f"Missing EPUB manifest resource: {member}")
+            items[item_id] = (member, item.get("media-type"))
+        readable = False
+        for itemref in spine:
+            if itemref.get("idref") not in items:
+                raise ValueError("EPUB spine references a missing manifest item")
+            member, media_type = items[itemref.get("idref")]
+            if media_type == "image/svg+xml":
+                svg = ET.fromstring(archive.read(member))
+                if svg.tag != "{http://www.w3.org/2000/svg}svg":
+                    raise ValueError("Invalid SVG spine document")
+                readable = readable or bool(list(svg))
+                continue
+            if media_type not in ("application/xhtml+xml", "text/html"):
+                raise ValueError("EPUB spine item is not a text document")
+            content = archive.read(member)
+            if media_type == "application/xhtml+xml":
+                ET.fromstring(content)
+            soup = BeautifulSoup(content, "html.parser")
+            body = soup.find("body")
+            if body is None:
+                raise ValueError(f"EPUB document lacks a body: {member}")
+            for hidden in body.find_all(["script", "style"]):
+                hidden.decompose()
+            readable = readable or any(char.isalnum() for char in body.get_text(" ", strip=True))
+            readable = readable or any(
+                tag.get("src") or tag.get("data") or (tag.name == "svg" and tag.find())
+                for tag in body.find_all(["img", "object", "svg", "video", "audio"])
+            )
+        if not readable:
+            raise ValueError("EPUB spine contains no readable text or visual content")
+        metadata = opf.find(f"{opf_ns}metadata")
+        def metadata_text(tag):
+            if metadata is None:
+                return ""
+            return "; ".join("".join(node.itertext()).strip()
+                             for node in metadata.findall(f"{dc_ns}{tag}"))
+        return {"file_count": len(archive.namelist()), "title": metadata_text("title"),
+                "author": metadata_text("creator"), "spine_count": len(spine)}
 
     @classmethod
     def _verify_image(cls, path: Path, head: bytes, size: int, ext: str) -> VerificationResult:

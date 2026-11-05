@@ -25,7 +25,11 @@ class QuarkDriver(BaseDriver):
     category = "pan"
 
     SHARE_URL_REGEX = re.compile(r"https?://pan\.quark\.cn/s/([a-zA-Z0-9]+)")
-    API_BASE = "https://drive.quark.cn/1/clouddrive"
+    API_BASE = "https://drive-h.quark.cn/1/clouddrive"
+    SHARE_MAX_DEPTH = 10
+    SHARE_MAX_PAGES = 20
+    SHARE_MAX_REQUESTS = 100
+    SHARE_PAGE_SIZE = 50
 
     DEFAULT_HEADERS = {
         "User-Agent": (
@@ -63,27 +67,26 @@ class QuarkDriver(BaseDriver):
         headers = dict(self.DEFAULT_HEADERS)
         headers["Cookie"] = cookie
 
-        # 1. Query Share File Metadata
-        detail_url = f"{self.API_BASE}/share/sharepage/detail"
-        params = {"pwd_id": pwd_id, "passcode": passcode, "pr": "ucpro", "fr": "pc"}
+        # 1. Obtain the read-only share credential before querying metadata.
+        token_url = f"{self.API_BASE}/share/sharepage/token?pr=ucpro&fr=pc"
         try:
-            r = requests.get(detail_url, params=params, headers=headers, timeout=15)
-            data = r.json()
-        except Exception as e:
-            raise ExtractionError(f"Failed to query Quark share details: {e}")
+            token_resp = requests.post(
+                token_url, json={"pwd_id": pwd_id, "passcode": passcode},
+                headers=headers, timeout=15,
+            ).json()
+        except Exception as exc:
+            raise ExtractionError("Failed to obtain Quark share token") from exc
+        if token_resp.get("status") != 200:
+            raise CloudDriveError(f"Quark share token request failed ({token_resp.get('status')})")
+        stoken = (token_resp.get("data") or {}).get("stoken")
+        if not stoken:
+            raise ExtractionError("Quark share token response is missing stoken")
 
-        if data.get("status") != 200:
-            msg = data.get("message", "Unknown error")
-            raise CloudDriveError(f"Quark API query error ({data.get('status')}): {msg}")
-
-        share_data = data.get("data", {})
-        file_list = share_data.get("list", [])
-        if not file_list:
-            raise ExtractionError(f"No files found in Quark share link (expired or empty).")
-
-        # Pick target file (first file in share)
-        target_item = file_list[0]
+        target_item, source_dir_fid, share_data = self._find_share_file(pwd_id, stoken, headers)
         share_fid = target_item.get("fid")
+        share_fid_token = target_item.get("share_fid_token")
+        if not share_fid or not share_fid_token:
+            raise ExtractionError("Quark shared file is missing fid or share_fid_token")
         filename = target_item.get("file_name", "quark_download.bin")
         filesize = target_item.get("size")
 
@@ -103,8 +106,12 @@ class QuarkDriver(BaseDriver):
             save_payload = {
                 "pwd_id": pwd_id,
                 "passcode": passcode,
+                "stoken": stoken,
                 "fid_list": [share_fid],
-                "to_pdir_fid": temp_dir_fid
+                "fid_token_list": [share_fid_token],
+                "to_pdir_fid": temp_dir_fid,
+                "pdir_fid": source_dir_fid,
+                "scene": "link",
             }
             try:
                 save_r = requests.post(save_url, json=save_payload, headers=headers, timeout=20)
@@ -141,7 +148,7 @@ class QuarkDriver(BaseDriver):
                 filename=filename,
                 file_type="primary",
                 expected_size=filesize,
-                headers={"User-Agent": self.DEFAULT_HEADERS["User-Agent"], "Referer": "https://pan.quark.cn/"}
+                headers=dict(headers)
             )
 
             return AssetPackage(
@@ -165,6 +172,55 @@ class QuarkDriver(BaseDriver):
         except BaseException as exc:
             self.cleanup_after_error(owned_package, exc)
             raise
+
+    def _find_share_file(self, pwd_id: str, stoken: str, headers: dict):
+        """Find the first actual file with bounded depth, pagination and requests."""
+        pending = [("0", 0)]
+        visited = set()
+        request_count = 0
+        depth_limited = False
+        while pending:
+            parent_fid, depth = pending.pop()
+            if parent_fid in visited:
+                continue
+            visited.add(parent_fid)
+            children = []
+            for page in range(1, self.SHARE_MAX_PAGES + 1):
+                if request_count >= self.SHARE_MAX_REQUESTS:
+                    raise ExtractionError("Quark share search request limit reached without finding a file")
+                request_count += 1
+                params = {
+                    "pr": "ucpro", "fr": "pc", "pwd_id": pwd_id, "stoken": stoken,
+                    "pdir_fid": parent_fid, "_page": page, "_size": self.SHARE_PAGE_SIZE,
+                }
+                try:
+                    response = requests.get(
+                        f"{self.API_BASE}/share/sharepage/detail",
+                        params=params, headers=headers, timeout=15,
+                    ).json()
+                except Exception as exc:
+                    raise ExtractionError("Failed to query Quark share details") from exc
+                if response.get("status") != 200:
+                    raise CloudDriveError(f"Quark share detail query failed ({response.get('status')})")
+                share_data = response.get("data") or {}
+                items = share_data.get("list") or []
+                for item in items:
+                    if item.get("dir"):
+                        if item.get("fid"):
+                            if depth >= self.SHARE_MAX_DEPTH:
+                                depth_limited = True
+                            else:
+                                children.append((str(item["fid"]), depth + 1))
+                    elif item.get("file"):
+                        return item, parent_fid, share_data
+                if len(items) < self.SHARE_PAGE_SIZE:
+                    break
+            else:
+                raise ExtractionError("Quark share pagination limit reached without finding a file")
+            pending.extend(reversed(children))
+        if depth_limited:
+            raise ExtractionError("Quark share directory depth limit reached without finding a file")
+        raise ExtractionError("No actual files found in Quark share (empty directories or pagination exhausted)")
 
     def _get_or_create_temp_folder(self, headers: dict) -> str:
         """Create a task-owned directory; never reuse a user directory or root."""
@@ -200,17 +256,14 @@ class QuarkDriver(BaseDriver):
         raise CloudDriveError(f"Timed out waiting for file `{filename}` to appear in Quark temp folder.")
 
     def cleanup(self, package: AssetPackage) -> None:
-        """
-        Post-download atomic cleanup: silently destroy the cloud copy in `/_da_temp/`.
-        Guarantees zero residual junk in user's cloud drive.
-        """
+        """Post-download cleanup: remove the task-owned temporary folder in Quark Drive."""
         saved_fid = package.context.get("owned_temp_dir")
         headers = package.context.get("headers")
         if not saved_fid or str(saved_fid) == "0" or not headers:
             return
 
         del_url = f"{self.API_BASE}/file/delete?pr=ucpro&fr=pc"
-        payload = {"action_type": 2, "file_ids": [saved_fid]}
+        payload = {"action_type": 1, "filelist": [saved_fid], "exclude_fids": []}
         response = requests.post(del_url, json=payload, headers=headers, timeout=10)
         response.raise_for_status()
         if response.json().get("status") != 200:

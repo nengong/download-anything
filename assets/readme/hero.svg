@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="420" viewBox="0 0 1200 420"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Download Anything (DA) — 数字微资产提取与离线归档中枢</title>
+  <desc id="desc">提供 CLI (da/dl) 与 AI Agent Skill 双入口，支持视频、多图、播客、音频、网盘、论文、ISBN/MD5 电子书、公众号/技术文章、GitHub 单文件与安装包的下载、格式校验与本地归档。</desc>
+
+  <defs>
+    <linearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#090D16"/>
+      <stop offset="55%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#0B1320"/>
+    </linearGradient>
+    <linearGradient id="term-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#111C2D"/>
+      <stop offset="100%" stop-color="#0B111E"/>
+    </linearGradient>
+    <linearGradient id="accent-line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="60%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Canvas -->
+  <rect width="1200" height="420" rx="24" fill="url(#bg-grad)"/>
+  <rect x="1" y="1" width="1198" height="418" rx="23" fill="none" stroke="#1E293B" stroke-width="2"/>
+
+  <!-- Subtle Technical Grid Lines -->
+  <g stroke="#1E293B" stroke-width="1" opacity="0.45">
+    <line x1="56" y1="76" x2="1144" y2="76"/>
+    <line x1="56" y1="356" x2="1144" y2="356"/>
+    <line x1="636" y1="36" x2="636" y2="384" stroke-dasharray="4 6"/>
+  </g>
+
+  <!-- Left Column: Identity & Value Proposition -->
+  <g id="title-block" transform="translate(56 44)">
+    <!-- Eyebrow / Category Badge -->
+    <rect x="0" y="0" width="380" height="32" rx="16" fill="#0F2922" stroke="#10B981" stroke-width="1.2"/>
+    <circle cx="18" cy="16" r="5" fill="#10B981"/>
+    <text x="32" y="22" fill="#34D399" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16" font-weight="600">CLI (da / dl)  +  AI AGENT SKILL</text>
+
+    <!-- Main Title -->
+    <text x="0" y="96" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="52" font-weight="800" letter-spacing="-0.5">Download Anything</text>
+
+    <!-- Accent Bar -->
+    <rect x="0" y="114" width="460" height="4" rx="2" fill="url(#accent-line)"/>
+
+    <!-- Subtitle / Concrete Value -->
+    <text x="0" y="156" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="22" font-weight="600">数字微资产提取与本地归档中枢</text>
+    <text x="0" y="192" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="18">自动净化脏链接与提取码 · 保留正文/图片/字幕/元数据 · 格式级验收</text>
+
+    <!-- 4 Domain Capability Pills (2x2 Grid) -->
+    <g transform="translate(0 218)">
+      <!-- Pill 1 -->
+      <rect x="0" y="0" width="265" height="44" rx="10" fill="#111827" stroke="#1E293B" stroke-width="1.5"/>
+      <text x="16" y="28" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">01</text>
+      <text x="48" y="28" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18" font-weight="500">视频 / 多图 / 播客 / 音频</text>
+
+      <!-- Pill 2 -->
+      <rect x="280" y="0" width="265" height="44" rx="10" fill="#111827" stroke="#1E293B" stroke-width="1.5"/>
+      <text x="296" y="28" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">02</text>
+      <text x="328" y="28" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18" font-weight="500">网盘 / 安装包 / GitHub</text>
+
+      <!-- Pill 3 -->
+      <rect x="0" y="54" width="265" height="44" rx="10" fill="#111827" stroke="#1E293B" stroke-width="1.5"/>
+      <text x="16" y="82" fill="#F59E0B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">03</text>
+      <text x="48" y="82" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18" font-weight="500">论文 DOI / arXiv / 电子书</text>
+
+      <!-- Pill 4 -->
+      <rect x="280" y="54" width="265" height="44" rx="10" fill="#111827" stroke="#1E293B" stroke-width="1.5"/>
+      <text x="296" y="82" fill="#A78BFA" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">04</text>
+      <text x="328" y="82" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18" font-weight="500">公众号 / 技术文 / Obsidian</text>
+    </g>
+
+    <!-- Bottom Metadata Row -->
+    <text x="0" y="346" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">v0.1.0  ·  Python &gt;= 3.10  ·  CLI + Agent Skill  ·  MIT License</text>
+  </g>
+
+  <!-- Right Column: Real Terminal + JSON Proof Board -->
+  <g id="project-proof" transform="translate(664 40)">
+    <!-- Terminal Window Container -->
+    <rect x="0" y="0" width="484" height="340" rx="14" fill="url(#term-grad)" stroke="#334155" stroke-width="1.5"/>
+
+    <!-- Terminal Header Bar -->
+    <path d="M 0 14 Q 0 0 14 0 L 470 0 Q 484 0 484 14 L 484 40 L 0 40 Z" fill="#1E293B"/>
+    <circle cx="22" cy="20" r="6" fill="#EF4444"/>
+    <circle cx="42" cy="20" r="6" fill="#F59E0B"/>
+    <circle cx="62" cy="20" r="6" fill="#10B981"/>
+    <text x="90" y="26" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">da — structured extraction &amp; verify</text>
+
+    <!-- Command Input Section -->
+    <text x="22" y="74" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="600">
+      <tspan fill="#10B981" font-weight="700">$ </tspan>
+      <tspan fill="#F8FAFC">da "https://arxiv.org/abs/2310.06825" --json</tspan>
+    </text>
+
+    <!-- Router & Verifier Pipeline Badges inside Terminal -->
+    <rect x="22" y="90" width="440" height="34" rx="6" fill="#0F172A" stroke="#1E293B" stroke-width="1"/>
+    <text x="34" y="113" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">
+      <tspan fill="#38BDF8">Router → arxiv</tspan>
+      <tspan fill="#64748B">   |   </tspan>
+      <tspan fill="#34D399">Verifier → pypdf: valid</tspan>
+    </text>
+
+    <!-- JSON Output Preview -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">
+      <text x="22" y="152" fill="#94A3B8">{</text>
+      <text x="42" y="180">
+        <tspan fill="#38BDF8">"status"</tspan><tspan fill="#94A3B8">: </tspan><tspan fill="#10B981" font-weight="700">"success"</tspan><tspan fill="#94A3B8">,</tspan>
+      </text>
+      <text x="42" y="208">
+        <tspan fill="#38BDF8">"platform"</tspan><tspan fill="#94A3B8">: </tspan><tspan fill="#FDE68A">"arxiv"</tspan><tspan fill="#94A3B8">,</tspan>
+      </text>
+      <text x="42" y="236">
+        <tspan fill="#38BDF8">"primary_asset"</tspan><tspan fill="#94A3B8">: </tspan><tspan fill="#E2E8F0">".../Mistral 7B.pdf"</tspan><tspan fill="#94A3B8">,</tspan>
+      </text>
+      <text x="42" y="264">
+        <tspan fill="#38BDF8">"companion_files"</tspan><tspan fill="#94A3B8">: [</tspan><tspan fill="#A78BFA">".../citation.bib"</tspan><tspan fill="#94A3B8">],</tspan>
+      </text>
+      <text x="42" y="292">
+        <tspan fill="#38BDF8">"verification"</tspan><tspan fill="#94A3B8">: {</tspan><tspan fill="#10B981">"valid": true</tspan><tspan fill="#94A3B8">}</tspan>
+      </text>
+      <text x="22" y="320" fill="#94A3B8">}</text>
+    </g>
+  </g>
+</svg>

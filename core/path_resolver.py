@@ -5,6 +5,7 @@ Implements industry-standard directory resolution and title sanitization.
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Optional
@@ -59,6 +60,37 @@ def resolve_asset_path(base_dir: Path, filename: str) -> Path:
     except ValueError:
         raise DAError(f"Asset path escapes output directory: {raw_name}")
     return target
+
+
+def create_task_directory(candidate: Path) -> Path:
+    """Claim a fresh task directory atomically, keeping previous deliveries intact."""
+    candidate = Path(candidate)
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    index = 1
+    while True:
+        target = candidate if index == 1 else candidate.with_name(f"{candidate.name}_{index}")
+        try:
+            target.mkdir(exist_ok=False)
+            return target
+        except FileExistsError:
+            index += 1
+
+
+def reserve_asset_path(base_dir: Path, filename: str, reserved: set) -> Path:
+    """Reserve names using portable case/Unicode collision rules before writing."""
+    target = resolve_asset_path(base_dir, filename)
+    original = target
+    index = 1
+    while True:
+        key = unicodedata.normalize("NFC", str(target.relative_to(base_dir.resolve()))).casefold()
+        if key not in reserved and not target.exists():
+            reserved.add(key)
+            return target
+        index += 1
+        suffix = original.suffix
+        ending = f"-{index}{suffix}"
+        stem = original.stem[:max(1, 80 - len(ending))]
+        target = original.with_name(stem + ending)
 
 
 def get_system_downloads_dir() -> Path:

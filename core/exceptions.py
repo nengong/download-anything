@@ -36,3 +36,11 @@ class VerificationError(DAError):
 class CloudDriveError(DAError):
     """Raised when cloud drive operations (save, share query, clean up) encounter errors."""
     pass
+
+
+class BackendUnavailableError(ExtractionError):
+    """A public backend failed without an authentication or identity violation."""
+
+
+class AccessDeniedError(ExtractionError):
+    """Authentication, permission or rate limiting must stop backend fallback."""

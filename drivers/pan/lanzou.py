@@ -41,6 +41,7 @@ class LanzouDriver(BaseDriver):
             raise ExtractionError(f"Failed to access Lanzou URL {url}: {e}")
 
         # Check for iframe (Lanzou sometimes embeds file handler inside <iframe src="/fn?...">)
+        outer_html = html
         iframe_match = re.search(r'<iframe\s+[^>]*src="(/fn\?[^"]+)"', html, re.IGNORECASE)
         page_url = url
         if iframe_match:
@@ -58,8 +59,9 @@ class LanzouDriver(BaseDriver):
         # 2. Extract Title / Filename
         title = "lanzou_asset"
         title_match = (
-            re.search(r'<div class="n_box_3fn">([^<]+)</div>', html) or
-            re.search(r'<div class="filethetext"[^>]*>([^<]+)</div>', html) or
+            re.search(r'<div class="n_box_3fn">([^<]+)</div>', outer_html) or
+            re.search(r'<div class="filethetext"[^>]*>([^<]+)</div>', outer_html) or
+            re.search(r'<title>([^<_\-]+)', outer_html) or
             re.search(r'<title>([^<_\-]+)', html)
         )
         if title_match:
@@ -67,7 +69,7 @@ class LanzouDriver(BaseDriver):
 
         # Extract File Size if present
         size_bytes = None
-        size_match = re.search(r'(?:大小|Size)[：:\s]*([\d\.]+)\s*([KkMmGg][Bb]?)', html)
+        size_match = re.search(r'(?:大小|Size)[：:\s]*([\d\.]+)\s*([KkMmGg][Bb]?)', outer_html)
         if size_match:
             val, unit = float(size_match.group(1)), size_match.group(2).upper()
             if "G" in unit:
@@ -77,35 +79,56 @@ class LanzouDriver(BaseDriver):
             elif "K" in unit:
                 size_bytes = int(val * 1024)
 
-        # 3. Reverse ajaxm.php parameters
-        # Lanzou page constructs POST data to /ajaxm.php
+        # 3. Reverse the download API parameters
+        # Current pages expose wp_sign + ajaxdata and POST to an apifile host;
+        # older pages expose a bare sign and POST to /ajaxm.php.
         sign_match = (
+            re.search(r"var\s+wp_sign\s*=\s*'([^']+)'", html) or
+            re.search(r"\bwp_sign\s*=\s*'([^']+)'", html) or
             re.search(r"var\s+skdkld\s*=\s*'([^']+)'", html) or
-            re.search(r"var\s+ajaxdata\s*=\s*'([^']+)'", html) or
             re.search(r"var\s+signs\s*=\s*'([^']+)'", html) or
             re.search(r"'sign'\s*:\s*'([^']+)'", html) or
             re.search(r"sign\s*:\s*'([^']+)'", html)
         )
 
         websign_match = re.search(r"var\s+ws_sign\s*=\s*'([^']*)'", html) or re.search(r"var\s+websign\s*=\s*'([^']*)'", html)
-        websignkey_match = re.search(r"var\s+websignkey\s*=\s*'([^']*)'", html)
+        websignkey_match = (
+            re.search(r"var\s+ajaxdata\s*=\s*'([^']*)'", html) or
+            re.search(r"var\s+websignkey\s*=\s*'([^']*)'", html)
+        )
+        kd_match = re.search(r"var\s+kdns\s*=\s*(\d+)", html) or re.search(r"var\s+kd\s*=\s*(\d+)", html)
 
         post_data = {
             "action": "downprocess",
-            "sign": sign_match.group(1) if sign_match else "",
             "ves": 1,
         }
-        if websign_match:
-            post_data["websign"] = websign_match.group(1)
+        if sign_match:
+            post_data["sign"] = sign_match.group(1)
         if websignkey_match:
             post_data["websignkey"] = websignkey_match.group(1)
+            post_data["signs"] = websignkey_match.group(1)
+        if websign_match:
+            post_data["websign"] = websign_match.group(1)
+        if kd_match:
+            post_data["kd"] = kd_match.group(1)
         if password:
             post_data["p"] = password
             post_data["pwd"] = password
 
-        # Determine ajax URL
-        parsed = urlparse(page_url)
-        ajax_url = f"{parsed.scheme}://{parsed.netloc}/ajaxm.php"
+        # Determine ajax URL (new pages provide a full apifile endpoint)
+        ajax_url = None
+        for pattern in (
+            r"var\s+domain1\s*=\s*'([^']+)'",
+            r"var\s+dom_ajaxs\s*=\s*'([^']+)'",
+            r"var\s+domain2\s*=\s*'([^']+)'",
+        ):
+            m = re.search(pattern, html)
+            if m:
+                ajax_url = m.group(1)
+                break
+        if not ajax_url:
+            parsed = urlparse(page_url)
+            ajax_url = f"{parsed.scheme}://{parsed.netloc}/ajaxm.php"
 
         session.headers["Referer"] = page_url
         session.headers["X-Requested-With"] = "XMLHttpRequest"
@@ -117,9 +140,9 @@ class LanzouDriver(BaseDriver):
             raise ExtractionError(f"Failed to reverse Lanzou ajaxm.php API: {e}")
 
         # zt=1: success; zt=2: password required/incorrect
-        if ajax_data.get("zt") != 1:
+        if str(ajax_data.get("zt")) != "1":
             inf = ajax_data.get("inf", "Unknown error")
-            if "密码" in inf or ajax_data.get("zt") == 2:
+            if "密码" in inf or str(ajax_data.get("zt")) == "2":
                 raise ExtractionError(f"Lanzou extraction requires password: {inf}")
             raise ExtractionError(f"Lanzou extraction failed: {inf}")
 

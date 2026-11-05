@@ -5,7 +5,8 @@ import io
 import zipfile
 from pathlib import Path
 from PIL import Image
-from core.verifier import Verifier
+import pytest
+from core.verifier import Verifier, detect_ebook_format
 
 def test_verify_html_trap_detection(tmp_path):
     fake_file = tmp_path / "book.pdf"
@@ -37,14 +38,83 @@ def test_verify_pdf_truncated(tmp_path):
     assert not res.valid
     assert res.detected_type == "truncated_pdf"
 
-def test_verify_zip_and_epub(tmp_path):
+def test_verify_zip_and_epub(tmp_path, ebook_payload):
     epub_file = tmp_path / "sample.epub"
-    with zipfile.ZipFile(epub_file, "w") as zf:
-        zf.writestr("mimetype", "application/epub+zip")
-        zf.writestr("META-INF/container.xml", "<container/>")
+    epub_file.write_bytes(ebook_payload("epub"))
     res = Verifier.verify(epub_file, expected_ext="epub")
     assert res.valid
     assert res.detected_type == "epub"
+    assert res.details == {"file_count": 4, "title": "Minimal Book",
+                           "author": "Test Author", "spine_count": 1}
+
+
+@pytest.mark.parametrize("actual,declared", [("epub", "pdf"), ("pdf", "epub"), ("pdf", "pdf")])
+def test_detect_ebook_format_ignores_suffix(tmp_path, ebook_payload, actual, declared):
+    path = tmp_path / f"book.{declared}"
+    payload = ebook_payload(actual)
+    path.write_bytes(payload)
+    assert detect_ebook_format(path) == actual
+    assert path.read_bytes() == payload
+    assert Verifier.verify(path, expected_ext=actual).valid
+
+
+@pytest.mark.parametrize("marker", [None, b"application/zip", b"application/epub+zip\n"])
+def test_detect_ebook_format_rejects_ordinary_zip(tmp_path, marker):
+    path = tmp_path / "ordinary.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("hello.txt", "Not an ebook")
+        if marker is not None:
+            archive.writestr("mimetype", marker)
+    assert detect_ebook_format(path) is None
+    assert not Verifier.verify(path).valid
+    assert Verifier.verify(path, expected_ext="zip").valid
+
+
+@pytest.mark.parametrize("missing", ["mimetype", "META-INF/container.xml", "OEBPS/book.opf",
+                                    "OEBPS/text/chapter.xhtml"])
+def test_epub_rejects_missing_required_members(tmp_path, epub_members, missing):
+    del epub_members[missing]
+    path = tmp_path / "missing.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in epub_members.items():
+            archive.writestr(name, content)
+    assert not Verifier.verify(path).valid
+
+
+@pytest.mark.parametrize("member,old,new", [
+    ("mimetype", b"application/epub+zip", b"application/zip"),
+    ("META-INF/container.xml", b"application/oebps-package+xml", b"text/plain"),
+    ("META-INF/container.xml", b"OEBPS/book.opf", b"../book.opf"),
+    ("META-INF/container.xml", b"</container>", b""),
+    ("OEBPS/book.opf", b'idref="chapter"', b'idref="missing"'),
+    ("OEBPS/book.opf", b'<itemref idref="chapter"/>', b""),
+    ("OEBPS/book.opf", b'<item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/>', b""),
+    ("OEBPS/book.opf", b"text/chapter.xhtml", b"../../chapter.xhtml"),
+    ("OEBPS/book.opf", b"text/chapter.xhtml", b"%2e%2e/%2e%2e/chapter.xhtml"),
+    ("OEBPS/book.opf", b"text/chapter.xhtml", b"/chapter.xhtml"),
+    ("OEBPS/book.opf", b"</package>", b""),
+    ("OEBPS/text/chapter.xhtml", b"Readable chapter text.", b""),
+    ("OEBPS/text/chapter.xhtml", b"</html>", b""),
+])
+def test_epub_rejects_invalid_structure(tmp_path, epub_members, member, old, new):
+    epub_members[member] = epub_members[member].replace(old, new)
+    path = tmp_path / "invalid.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in epub_members.items():
+            archive.writestr(name, content)
+    result = Verifier.verify(path)
+    assert not result.valid
+    assert result.detected_type == "invalid_epub"
+
+
+def test_epub_normalizes_relative_member_paths(tmp_path, epub_members):
+    epub_members["OEBPS/book.opf"] = epub_members["OEBPS/book.opf"].replace(
+        b"text/chapter.xhtml", b"text/../text/chapter.xhtml")
+    path = tmp_path / "normalized.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in epub_members.items():
+            archive.writestr(name, content)
+    assert Verifier.verify(path).valid
 
 def test_verify_image(tmp_path):
     img_file = tmp_path / "cover.png"

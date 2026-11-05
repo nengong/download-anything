@@ -1,6 +1,7 @@
 """
 Environment Diagnostic, Dependency Verification, and Auto-Repair Hub (da doctor)
 """
+import os
 import sys
 import shutil
 import subprocess
@@ -18,17 +19,58 @@ DEPENDENCY_SPEC = {
     "pypdf": ("pypdf>=4.2.0", "PDF 结构完整性与 EOF 签名验收", True),
     "cryptography": ("cryptography>=42.0.0", "跨平台 Chromium/Keychain 本地 Cookie 解密", True),
     "rookiepy": ("rookiepy>=0.4.0", "原生静默读取 Chrome/Safari 默认浏览器 Cookie（可选增强，缺省时自动回退本地 Cookie 库）", False),
-    "yt_dlp": ("yt-dlp>=2024.0.0", "YouTube/Twitter/Instagram 全球社交音视频提取器", True),
+    "yt_dlp": ("yt-dlp>=2024.0.0", "YouTube/Twitter/Instagram 及通用 yt-dlp 兜底提取器", True),
+    "gallery_dl": ("gallery-dl>=1.32.19", "X/Instagram/微博图片提取后端", True),
 }
 
 EXTERNAL_TOOLS = {
     "curl": ("系统原生流式网络下载工具，用于极端环境兜底", True),
-    "ffmpeg": ("音视频流合并与无损格式探测（可选）", False),
-    "ffprobe": ("音视频结构校验（下载音视频时必须安装；随 FFmpeg 提供）", False),
+    "ffmpeg": ("音视频抽轨、转码与流合并（仅音视频功能需要）", False),
+    "ffprobe": ("音视频结构校验（仅下载音视频时需要；随 FFmpeg 提供）", False),
 }
+
+# FFmpeg is a media-only dependency: every other driver keeps working without it.
+MEDIA_TOOL_SCOPE = {
+    "ffmpeg": {
+        "scope": "仅音视频",
+        "affects": ["音频提取", "格式转码", "音视频流合并"],
+        "unaffected": ["文档", "论文", "电子书", "图片", "网盘", "网页/文章"],
+    },
+    "ffprobe": {
+        "scope": "仅音视频",
+        "affects": ["音视频结构完整性校验"],
+        "unaffected": ["文档", "论文", "电子书", "图片", "网盘", "网页/文章"],
+    },
+}
+
+MEDIA_TOOL_INSTALL = {
+    "darwin": "brew install ffmpeg",
+    "win32": "winget install -e --id Gyan.FFmpeg",
+    "linux": "sudo apt install ffmpeg  # Debian/Ubuntu；Fedora 用 sudo dnf install ffmpeg",
+}
+
+# Install commands for bootstrapping a Python new enough for the CLI.
+PYTHON_INSTALL = {
+    "darwin": "brew install python@3.12   # 或安装 uv：brew install uv",
+    "win32": "winget install -e --id Python.Python.3.12",
+    "linux": "sudo apt install python3.12 python3.12-venv   # Debian/Ubuntu；Fedora 用 sudo dnf install python3.12",
+}
+
+
+def _platform_key():
+    return "darwin" if sys.platform == "darwin" else "win32" if sys.platform == "win32" else "linux"
+
+PYPI_MIRRORS = (
+    ("清华镜像", "https://pypi.tuna.tsinghua.edu.cn/simple"),
+    ("阿里云镜像", "https://mirrors.aliyun.com/pypi/simple/"),
+)
 
 class Doctor:
     """Diagnoses environment readiness, missing libraries, and provides automatic fixes."""
+
+    @staticmethod
+    def python_install_hint() -> str:
+        return PYTHON_INSTALL[_platform_key()]
 
     @staticmethod
     def check_all() -> Dict[str, Any]:
@@ -37,11 +79,13 @@ class Doctor:
             "python_version": {
                 "version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
                 "ok": sys.version_info >= (3, 10),
-                "required": ">=3.10"
+                "required": ">=3.10",
+                "install_hint": Doctor.python_install_hint(),
             },
             "dependencies": {},
             "external_tools": {},
             "mac_fda": None,
+            "media_ready": False,
             "all_required_ok": sys.version_info >= (3, 10),
         }
 
@@ -74,14 +118,22 @@ class Doctor:
         # 2. Check External Tools
         for tool, (desc, is_req) in EXTERNAL_TOOLS.items():
             path = shutil.which(tool)
-            report["external_tools"][tool] = {
+            info = {
                 "installed": bool(path),
                 "path": path,
                 "description": desc,
                 "required": is_req,
             }
+            if tool in MEDIA_TOOL_SCOPE:
+                info.update(MEDIA_TOOL_SCOPE[tool])
+                info["install_hint"] = MEDIA_TOOL_INSTALL[_platform_key()]
+            report["external_tools"][tool] = info
             if is_req and not path:
                 report["all_required_ok"] = False
+
+        report["media_ready"] = all(
+            report["external_tools"][tool]["installed"] for tool in MEDIA_TOOL_SCOPE
+        )
 
         # 3. macOS Full Disk Access (FDA) check
         if sys.platform == "darwin":
@@ -109,6 +161,10 @@ class Doctor:
         Automatically install missing Python dependencies using uv (fast) or pip.
         Returns True if all required dependencies succeed.
         """
+        if sys.version_info < (3, 10):
+            # Installing dependencies cannot fix an interpreter that is too old.
+            return False
+
         report = Doctor.check_all()
         missing = [
             info["pip_name"]
@@ -123,17 +179,31 @@ class Doctor:
         py_executable = sys.executable
 
         if has_uv:
-            cmd = ["uv", "pip", "install", "--python", py_executable] + missing
+            base = ["uv", "pip", "install", "--python", py_executable]
         else:
-            cmd = [py_executable, "-m", "pip", "install"] + missing
+            base = [py_executable, "-m", "pip", "install", "--disable-pip-version-check",
+                    "--timeout", "25", "--retries", "1"]
 
-        try:
-            output_options = (
-                {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
-                if capture_output
-                else {}
-            )
-            res = subprocess.run(cmd, check=True, **output_options)
-            return res.returncode == 0
-        except Exception:
-            return False
+        output_options = (
+            {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+            if capture_output
+            else {}
+        )
+        env = dict(os.environ)
+        env.setdefault("UV_HTTP_TIMEOUT", "50")
+        sources = [("官方 PyPI", None)] + list(PYPI_MIRRORS)
+        custom = os.environ.get("DA_PIP_INDEX_URL", "").strip()
+        if custom:
+            sources.insert(0, ("自定义源 DA_PIP_INDEX_URL", custom))
+        for _label, index_url in sources:
+            cmd = list(base)
+            if index_url:
+                cmd += ["--index-url", index_url]
+            cmd += missing
+            try:
+                res = subprocess.run(cmd, check=True, timeout=1800, env=env, **output_options)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                continue
+        return False

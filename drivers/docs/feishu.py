@@ -8,6 +8,7 @@ import re
 from typing import Optional, List, Dict, Any
 from urllib.parse import urljoin, urlparse
 import requests
+from core.url_policy import is_http_url, require_http_url
 from bs4 import BeautifulSoup
 
 from core.exceptions import ExtractionError, AuthenticationRequiredError
@@ -35,7 +36,7 @@ class FeishuDocDriver(BaseDriver):
 
     def can_handle(self, url: str) -> bool:
         clean = url.strip().lower()
-        if "feishu.cn" in clean or "larksuite.com" in clean:
+        if is_http_url(url, ("feishu.cn", "larksuite.com")):
             if "/docx/" in clean or "/wiki/" in clean or "/docs/" in clean:
                 return True
         return False
@@ -49,6 +50,7 @@ class FeishuDocDriver(BaseDriver):
             resp = session.get(clean, timeout=12)
             if resp.status_code in (401, 403) or "passport.feishu.cn" in resp.url or "passport.larksuite.com" in resp.url:
                 raise AuthenticationRequiredError(f"Feishu document requires login or access permission: {url}")
+            resp.raise_for_status()
             html = resp.text
         except AuthenticationRequiredError:
             raise
@@ -82,7 +84,7 @@ class FeishuDocDriver(BaseDriver):
             src = img.get("src") or img.get("data-src")
             if not src or src.startswith("data:"):
                 continue
-            full_url = urljoin(url, src)
+            full_url = require_http_url(urljoin(resp.url, src))
             img_filename = f"feishu_img_{img_counter:02d}.png"
             assets.append(TargetAsset(
                 filename=img_filename,

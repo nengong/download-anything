@@ -83,18 +83,38 @@ class XiaohongshuDriver(BaseDriver):
         # 3. Check Video Note
         video_info = note_data.get("video")
         if video_info and isinstance(video_info, dict):
-            media = video_info.get("media", {})
-            stream = media.get("stream", {})
-            # Look for best stream (h264, h265)
+            # 3.1 Prefer unwatermarked raw origin video stream via originVideoKey
+            origin_key = (
+                (video_info.get("consumer") or {}).get("originVideoKey")
+                or video_info.get("originVideoKey")
+            )
+            if not origin_key and html:
+                m_key = re.search(r'originVideoKey["\':\s]+([^\'",\s\\}]+(?:\\u002F[^\'",\s\\}]+)*)', html)
+                if m_key:
+                    origin_key = m_key.group(1).replace(r"\u002F", "/")
+
             video_url = None
-            for codec in ("h264", "h265", "av1"):
-                arr = stream.get(codec) or []
-                for s in arr:
-                    if isinstance(s, dict) and s.get("masterUrl"):
-                        video_url = s["masterUrl"]
+            watermark_status = "platform_watermark"
+            watermark_note = "未暴露originVideoKey，已回退为网页自适应预览流（含平台水印）"
+
+            if origin_key:
+                clean_key = str(origin_key).replace(r"\u002F", "/").lstrip("/")
+                video_url = f"https://sns-video-bd.xhscdn.com/{clean_key}"
+                watermark_status = "clean"
+                watermark_note = "通过originVideoKey提取创作者无水印母带源"
+
+            # 3.2 Fallback to adaptive preview stream if originVideoKey is not exposed
+            if not video_url:
+                media = video_info.get("media", {})
+                stream = media.get("stream", {})
+                for codec in ("h264", "h265", "av1"):
+                    arr = stream.get(codec) or []
+                    for s in arr:
+                        if isinstance(s, dict) and s.get("masterUrl"):
+                            video_url = s["masterUrl"]
+                            break
+                    if video_url:
                         break
-                if video_url:
-                    break
 
             if video_url:
                 assets.append(TargetAsset(
@@ -167,18 +187,22 @@ class XiaohongshuDriver(BaseDriver):
                 headers={"User-Agent": self.MOBILE_UA, "Referer": "https://www.xiaohongshu.com/"}
             ))
 
+        meta = {
+            "original_url": url,
+            "author": {"id": author_id, "name": author_name},
+            "author_name": author_name,
+            "metrics": metrics,
+            "tags": tag_list,
+            "description": desc,
+            "watermark_status": watermark_status if video_info else "clean",
+            "watermark_note": watermark_note if video_info else "小红书图文无水印原图",
+        }
+
         return AssetPackage(
             title=safe_title,
             platform=self.name,
             assets=assets,
-            metadata={
-                "original_url": url,
-                "author": {"id": author_id, "name": author_name},
-                "author_name": author_name,
-                "metrics": metrics,
-                "tags": tag_list,
-                "description": desc,
-            },
+            metadata=meta,
             raw_markdown=f"{desc}\n\n" + " ".join(f"#{t}" for t in tag_list)
         )
 
