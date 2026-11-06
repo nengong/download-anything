@@ -25,6 +25,22 @@
 
 默认输出目录优先级：`-o` → `DA_OUTPUT_DIR` → 当前项目内已有的下载/资产目录 → 系统 `Downloads` 下的 `DA` 文件夹。本地缓存索引位于 `~/.download-anything/index.db`，凭据配置文件位于 `~/.download-anything/credentials.yaml`（权限 `0600`）。
 
+### 凭据解析优先级与无头环境（Headless）支持
+
+平台凭据按如下优先级自动解析：
+1. **环境变量**：优先 `DA_<PLATFORM>_<KEY>`；Cookie 也支持 `<PLATFORM>_COOKIE`，例如 `DA_BAIDU_COOKIE` 优先于 `BAIDU_COOKIE`。Instagram 多图使用 `DA_INSTAGRAM_COOKIE_FILE` 指向授权 Cookie 文件。
+2. **本地配置文件**：`~/.download-anything/credentials.yaml` 及项目内 `config/credentials.yaml` 兜底；自行预置的文件应设置为 `0600`。
+3. **本机活跃浏览器 Cookie**：通过 `rookiepy` 静默提取 Chrome、Arc、Edge、Brave、Safari、Firefox 登录态（限桌面环境）。
+4. **桌面客户端本地数据库与 Keychain**：提取百度网盘/夸克网盘桌面端已登录数据库及 macOS Keychain。
+
+### 大文件预检与 Agent 命令超时保护
+
+- **预检模式（`--check`）**：针对网盘分享文件、高清长视频或未知体积资源，可先执行 `da "<目标>" --check --json` 获取文件名及可能提供的 `primary_asset.expected_size`；大小可能为空，耗时视平台和网络而定，部分驱动提取元数据时可能读取远端内容。百度和夸克预检不触发云端转存。JSON 可能含签名链接，勿公开完整输出。
+- **规避 Agent 命令等待超时**：若预检发现文件达到数百 MB 或 GB 级别，Agent 需：
+  1. 根据宿主工具的语义设置执行超时；等待时间与进程终止时间不一定相同；
+  2. 针对超过 500 MB 的单文件，主动追加 `--max-mb <容量>`（如 `--max-mb 2048`）；
+  3. 在支持后台任务的 Agent 框架中，可异步执行大任务，并持续检查状态直至完成。
+
 ## 常用示例
 
 ```bash

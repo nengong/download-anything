@@ -42,7 +42,7 @@ def _credential_file_lock(cred_file: Path):
 class CredentialsManager:
     """
     Resolves platform credentials from:
-    1. Environment variables (DA_<PLATFORM>_COOKIE)
+    1. Environment variables (DA_<PLATFORM>_<KEY>, or <PLATFORM>_COOKIE for cookies)
     2. User home configuration file (~/.download-anything/credentials.yaml) & fallback (config/credentials.yaml)
     3. Live default browser cookies (Chrome, Arc, Edge, Brave, Safari via rookiepy)
     4. Local desktop app SQLite databases (~/Library/Application Support/...)
@@ -245,16 +245,19 @@ class CredentialsManager:
     def get_credential(self, platform: str, key: str = "cookie") -> Optional[str]:
         """
         Lookup credentials in priority order:
-        1. Environment Variable: DA_<PLATFORM>_<KEY>
+        1. Environment Variable: DA_<PLATFORM>_<KEY>, then <PLATFORM>_COOKIE for cookies
         2. ~/.download-anything/credentials.yaml (or config/credentials.yaml fallback)
         3. Live Browser Cookies (Chrome/Arc/Edge/Safari via rookiepy)
         4. Native Desktop App Cookies SQLite DB (Quark, Baidu)
         5. macOS Keychain
         """
-        # 1. Environment Variable
-        env_key = f"DA_{platform.upper()}_{key.upper()}"
-        if env_key in os.environ and os.environ[env_key].strip():
-            return os.environ[env_key].strip()
+        # The unprefixed alias applies only to cookies, not arbitrary credential keys.
+        candidates = [f"DA_{platform.upper()}_{key.upper()}"]
+        if key.lower() == "cookie":
+            candidates.append(f"{platform.upper()}_COOKIE")
+        for env_k in candidates:
+            if env_k in os.environ and os.environ[env_k].strip():
+                return os.environ[env_k].strip()
 
         # 2. YAML file
         data = self._load_yaml()

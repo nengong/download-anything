@@ -21,7 +21,7 @@ def isolate_live_services(monkeypatch, tmp_path):
     import requests
     from core.credentials import credentials_manager
     for key in os.environ:
-        if key.startswith("DA_") and key.endswith("_COOKIE"):
+        if key.endswith("_COOKIE"):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(credentials_manager, "USER_CRED_DIR", tmp_path / "credentials")
     monkeypatch.setattr(credentials_manager, "config_dir", tmp_path / "config")

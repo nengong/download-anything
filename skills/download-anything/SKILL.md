@@ -29,6 +29,11 @@ description: 面向个人与 AI Agent 的全能下载与结构化归档工具。
    - 首次安装后或遇到环境报错时，运行 `da doctor --json` 检查 `all_required_ok` 与 `media_ready`。
    - **缺少 Python 依赖包**：若 `all_required_ok` 为 `false`，询问用户后运行 `da doctor --fix --json` 自动补齐（官方 PyPI 超时会自动切换清华/阿里云镜像）。
    - **音视频任务缺少 `ffmpeg` / `ffprobe`**：若当前任务涉及视频或音频，而 `media_ready` 为 `false`（未安装 FFmpeg），请明确告知用户“文档、图片、论文、电子书与网盘功能不受影响，但音视频合并、转码与双轨校验需要 FFmpeg”，并**询问用户是否需要代为执行安装命令**（macOS：`brew install ffmpeg`；Windows：`winget install -e --id Gyan.FFmpeg`；Linux：`sudo apt install ffmpeg`）。
+4. **无头环境（Headless）登录态配置**：
+   - 在远程服务器、CI/CD 或 Docker 容器等无桌面/无浏览器环境中，交互式 `da login <平台>` 无法调用本地桌面浏览器或 Keychain。
+   - **环境变量注入（推荐容器/CI）**：通过安全方式配置 `DA_<PLATFORM>_COOKIE` 或 `<PLATFORM>_COOKIE`（如 `DA_BAIDU_COOKIE`、`QUARK_COOKIE`）。Instagram 多图使用 `DA_INSTAGRAM_COOKIE_FILE` 指向授权 Cookie 文件，不使用上述 Cookie 字符串变量。
+   - **挂载或预置 credentials.yaml**：在用户目录配置 `~/.download-anything/credentials.yaml`（权限设为 `0600`，如 `chmod 600 ~/.download-anything/credentials.yaml`），按平台填入 Cookie。
+   - **安全红线**：严禁在 Agent 的终端输出或聊天对话中打印明文 Token、Cookie 或密码。
 
 ### 第二步：前置转换与工具边界判断
 当用户只提供名称而非直接链接/ID 时，**Agent 应先自行检索出精确标识符，再传给 `da`**：
@@ -37,7 +42,15 @@ description: 面向个人与 AI Agent 的全能下载与结构化归档工具。
 - **应用安装包**：若用户只给应用名称，先查出对应的 **Android 包名**（如 `org.videolan.vlc`）或 **Microsoft Store 12 位 Product ID**（如 `9N0DX20HK701`），再交给 `da`。
 - **GitHub 仓库与目录**：若用户需要克隆整个仓库或拉取多文件目录，优先使用环境中已有的 `gh` CLI、`git` 或 GitHub MCP；仅单文件直下（`github.com/.../blob/...`）使用 `da`。
 
-### 第三步：执行下载命令
+### 第三步：大文件预检与 Agent 命令超时保护（防卡死必读）
+长视频（如 4K 视频）、网盘大合集、安装包体积可能达到数百 MB 至数 GB，下载传输耗时极易超过 Agent 宿主环境的命令等待超时阈值（如默认 60s 或 120s）导致进程被强杀：
+1. **优先使用 `--check` 预检大小**：对于网盘分享、高清视频或未知大小的资源，先执行 `da "<目标>" --check --json`。`primary_asset.expected_size` 可能为空，预检时间取决于平台和网络；部分驱动提取元数据时可能读取远端内容。百度和夸克的预检不触发云端转存。JSON 可能含签名链接，勿公开完整输出。
+2. **动态调整超时与单文件上限**：
+   - 若预检体积超过默认 `500 MB` 上限，必须主动追加 `--max-mb <容量>`（如 `--max-mb 2048`）。
+   - 按宿主工具的实际语义设置执行超时；等待后返回会话 ID 与杀死超时进程是不同机制。不要假定 60～300 秒足以完成大文件下载。
+3. **支持异步后台模式**：在支持后台任务的 Agent 框架中，可异步启动大文件任务并持续检查退出状态、结果和必要的用户操作，直至任务完成。
+
+### 第四步：执行下载命令
 **自动化调用始终附加 `--json`**，从 `stdout` 解析结构化 JSON：
 
 ```bash
@@ -60,7 +73,7 @@ da login <平台名称> --json
 
 可选参数：`-o <目录>` 指定输出目录，`-p <密码>` 指定提取码或解压密码，`-f` 忽略缓存强制重下，`--max-mb N` 调整单文件大小上限（默认 500 MB），`--no-unzip` 保留原压缩包不自动解压，`--no-sidecar` 不生成额外配套文件。
 
-### 第四步：消费结构化归档产物（赋能下游分析）
+### 第五步：消费结构化归档产物（赋能下游分析）
 下载完成后，**不要直接读取 `.mp4` / `.m4a` 等二进制媒体文件**，应直接利用 JSON 返回的结构化文本文件完成用户的总结、提炼或问答需求：
 - **总结视频 / 播客**：直接读取 JSON 中 `sidecars.subtitle`（`.srt` 字幕）、`sidecars.transcript`（`.transcript.md` 转写稿）或 `sidecars.markdown`（节目 Shownotes、视频简介、时间戳与互动数据）。
 - **精读公众号 / 技术文章**：直接读取 `primary_asset`（`article.md`），正文内插图已转为同目录下的本地图片文件。
@@ -76,6 +89,9 @@ da login <平台名称> --json
   - **处理准则**：**切勿将 `partial` 当作失败去盲目重下主文件！** 直接使用已落盘的 `primary_asset`，并读取 `warnings` 与 `operations` 字段向用户说明哪项附属步骤未完成及其原因。
 - **`status: "dry_run"`（退出码 `0`）**：仅完成 `--check` 预检，未实际落盘文件。
 - **`status: "error"`（退出码 `1`）**：根据 `error_type` 执行有限自愈，严禁把失败或预检汇报为下载成功：
-  - `AuthenticationRequiredError`：目标平台（如百度网盘、夸克网盘、小红书视频、Instagram 多图）需要登录态。运行 `da login <平台> --json` 自动提取本机已登录会话，或提示用户先在浏览器登录目标站点。严禁在输出中打印 Cookie、Token 或 API Key 明文。
+  - `AuthenticationRequiredError`：目标平台（如百度网盘、夸克网盘、小红书视频、Instagram 多图）需要登录凭据。
+    - **本地桌面环境**：运行 `da login <平台> --json` 自动提取本机浏览器已登录会话，或提示用户在浏览器中先登录该站点。
+    - **无头（Headless）环境 / 容器 / 远程服务器**：百度和夸克可注入 `DA_<平台>_COOKIE` 或 `<平台>_COOKIE`，或配置权限为 `0600` 的 `~/.download-anything/credentials.yaml`；Instagram 多图需使用 `DA_INSTAGRAM_COOKIE_FILE` 指向授权 Cookie 文件。
+    - **安全红线**：严禁在输出或对话中打印 Cookie、Token 或 API Key 明文。
   - `FileTooLargeError`：超过默认 500 MB 上限。若用户明确需要下载该大文件，调高 `--max-mb N` 重试一次。
   - `ExtractionError`（含压缩包格式限制）：自动解压仅支持受限的 `ZIP` / `TAR`；若因 `7z`、`RAR` 或特殊加密方式报错而用户只需保存原压缩包，加上 `--no-unzip` 重试一次。

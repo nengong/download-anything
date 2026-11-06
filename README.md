@@ -73,6 +73,12 @@ python3 skills/download-anything/scripts/install.py
 
 删除安装时创建的虚拟环境目录（如 `~/.download-anything/venv`）并移除对应的 `PATH` 配置即可。`~/.download-anything/index.db`（缓存索引）、`~/.download-anything/credentials.yaml`（`0600` 权限凭据配置）及已下载文件可按需保留或手动清理。
 
+### 凭据管理与无头环境（Headless）运行
+
+对于需要登录凭据的平台（如百度网盘、夸克网盘），DA 支持多层次凭据解析：
+- **无头环境 / Docker / CI**：可通过安全方式注入 `DA_<PLATFORM>_COOKIE` 或 `<PLATFORM>_COOKIE`（如 `DA_BAIDU_COOKIE`、`QUARK_COOKIE`），或挂载 `~/.download-anything/credentials.yaml`；自行预置的凭据文件应设置为 `0600`。Instagram 多图使用 `DA_INSTAGRAM_COOKIE_FILE` 指向授权 Cookie 文件。
+- **桌面环境**：可直接运行 `da login <平台>` 从本机主流浏览器（Chrome/Arc/Edge/Safari 等）或桌面端客户端安全提取 Cookie。
+
 ## 工作机制与架构设计
 
 <p align="center">
