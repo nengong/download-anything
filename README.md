@@ -3,18 +3,18 @@
 </p>
 
 <p align="center">
+  <a href="#让-agent-帮你安装">让 Agent 安装</a> ·
   <a href="#快速上手">快速上手</a> ·
-  <a href="#安装升级与卸载">安装部署</a> ·
-  <a href="#支持的能力全景">支持平台矩阵</a> ·
-  <a href="#工作机制与架构设计">架构与四步闭环</a> ·
-  <a href="./skills/download-anything/references/cli.md">CLI 与 JSON 协议</a>
+  <a href="#支持的能力全景">支持的内容</a> ·
+  <a href="#工作机制与架构设计">工作流程</a> ·
+  <a href="./skills/download-anything/references/cli.md">CLI 文档</a>
 </p>
 
 # Download Anything (DA)
 
 **Download Anything (`da` / `dl`)** 是一个**面向个人与 AI Agent 的全能下载与结构化归档工具**，提供 **命令行 CLI** 与 **Agent Skill** 双入口。
 
-无论是日常刷到的 **B站 / 抖音 / 小红书 / YouTube / X 视频与多图实况**、**小宇宙与 Apple Podcasts 长播客**、**本地加密音频（NCM）**，还是 **微信公众号长文、技术博客、百度/夸克网盘分享、arXiv/DOI 学术论文、ISBN/MD5 电子书、GitHub 单文件或应用安装包**，直接把链接或杂乱的 App 分享口令丢给它，即可自动完成：
+视频、图片、播客、文章、论文、电子书、网盘文件或安装包：把链接、标识符或 App 分享口令交给它，就能下载内容并整理配套资料。
 
 1. **口令与脏链接剥离**：自动剔除分享文案中的乱码、表情与推广前缀，精准识别 URL、网盘提取码、DOI、ISBN 与 MD5。
 2. **主文件与结构化附件同步落盘**：除视频/音频/PDF 主文件外，自动提取配套的 `.srt` 字幕、`cover.jpg` 原画封面、`audio.mp3` 独立音轨、`citation.bib` 引用文件、防盗链本地化配图与 `.info.json` / `.md` 元数据，可直接喂给 AI Agent 总结或归档至 Obsidian。
