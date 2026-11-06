@@ -10,9 +10,19 @@
   <a href="./skills/download-anything/references/cli.md">CLI 文档</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/nengong/download-anything/releases/latest"><img src="https://img.shields.io/github/v/release/nengong/download-anything?color=2563eb&label=Release" alt="GitHub Release"></a>
+  <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/nengong/download-anything?color=10b981" alt="License: MIT"></a>
+  <a href="#让-agent-帮你安装"><img src="https://img.shields.io/badge/Agent%20Skill-Claude%20Code%20%7C%20Codex-8b5cf6" alt="Agent Skill"></a>
+  <a href="https://github.com/nengong/download-anything/stargazers"><img src="https://img.shields.io/github/stars/nengong/download-anything?style=social" alt="GitHub Stars"></a>
+</p>
+
 # Download Anything (DA)
 
-**Download Anything (`da` / `dl`)** 是一个**面向个人与 AI Agent 的全能下载与结构化归档工具**，提供 **命令行 CLI** 与 **Agent Skill** 双入口。
+> **All-in-one downloader CLI & AI Agent Skill** for videos, articles, podcasts, academic papers, books, cloud-drive files, and app packages — featuring auto credential stripping, multi-track media integrity verification, and structured archiving for Obsidian & LLMs.
+>
+> **面向个人与 AI Agent 的全能下载与结构化归档工具**：提供 **命令行 CLI** 与 **Agent Skill** 双入口。从 App 分享口令或原始链接一键下载内容，自动落盘配套字幕、原画封面、独立音轨、BibTeX 引用及本地化 Markdown。
 
 视频、图片、播客、文章、论文、电子书、网盘文件或安装包：把链接、标识符或 App 分享口令交给它，就能下载内容并整理配套资料。
 
