@@ -7,16 +7,14 @@ description: 面向个人与 AI Agent 的全能下载与结构化归档工具。
 
 调用 `da`（或 `dl`）将分享口令文本、链接、DOI、ISBN、MD5、包名或本地音频文件下载并结构化归档到本地。各平台详细输入输出规范见 [references/platforms.md](references/platforms.md)，完整 CLI 参数与 JSON 字段定义见 [references/cli.md](references/cli.md)。
 
-## 1. 支持的能力与路由速查表（按平台合并，自动识别视频/图文）
+## 1. 支持的能力与产物速查（按平台合并，单入口自动识别）
 
-| 类别 | 支持平台与输入形式 | 主文件产物（自动识别形态） | 自动生成的配套结构化文件（`sidecars` / `companion_files`） |
-| :--- | :--- | :--- | :--- |
-| **视频、图文与社交** | B站（链接/`b23.tv` 口令）、抖音（分享口令/`v.douyin.com`）、小红书（链接/`xhslink` 口令）、YouTube、X (Twitter)、微博、Instagram、TikTok、标准 `.m3u8` | 视频输出 `.mp4`（抖音支持免水印最高 4K；加 `-a` 提取纯音轨 `.m4a`/`.mp3`）；多图输出 `image_01.jpg` | `cover.jpg` 原画封面、`content.md`（正文/标签/互动数据）、`content.info.json`；**B站自动提取 `.srt` 字幕**；**抖音同步提取 `audio.mp3` 原声**；**小红书实况图提取配套 `.mov`**；多图其余图片按序存于 `companion_files` |
-| **播客、音乐与音频** | 小宇宙单集、Apple Podcasts 单集、网易云音乐、Spotify、Apple Music、本地 `.ncm` 解密、本地 `.flac` 转码 | `.m4a` 或 `.mp3`（本地转换统一输出 `320kbps .mp3`） | 播客 `content.md`（完整 Shownotes 与时间轴）、音乐 `.lrc` 同步滚动歌词、高清专辑封面；加 `--transcribe` 生成 `.transcript.md` |
-| **文章与知识库** | 微信公众号文章、主流技术社区（知乎/掘金/CSDN/博客园/Medium/Substack/少数派/简书/SegmentFault/开源中国/V2EX） | 干净 Markdown `article.md` | 正文全部防盗链图片本地化（`img_01.png`... 并重写相对路径）；加 `--vault` 自动注入 YAML frontmatter 同步至 Obsidian |
-| **论文与电子书** | arXiv（链接或编号如 `2310.06825`）、DOI（如 `10.1186/...`）、电子书（10/13 位 ISBN 或 32 位 MD5） | 论文 `.pdf`、电子书 `.epub` / `.pdf` | 论文自动生成标准 `citation.bib` 引用文件与包含作者/摘要的 `content.md` |
-| **网盘分享** | 百度网盘（含提取码口令）、夸克网盘（支持子目录递归与自动清理云端临时目录） | 分享原文件（ZIP/TAR 默认安全解压） | `extracted_files` 解压文件清单、`content.info.json` |
-| **代码与安装包** | GitHub 单文件（`blob` 链接）、微软商店（链接或 12 位 Product ID，限免费 MSIX/Appx 应用）、安卓 APK（Play 链接或包名，基于 F-Droid/Aptoide 镜像） | 原代码文件、`.msixbundle`/`.appxbundle`、`.apk` | `content.md`（含 PowerShell 离线安装指令或 `adb install` 命令） |
+- **视频、图文与社交**（B站 / 抖音 / 小红书 / YouTube / X / 微博 / Instagram / TikTok / `.m3u8`）：自动识别视频（输出 `.mp4`，抖音支持免水印最高 4K；加 `-a` 提取纯音轨 `.m4a`/`.mp3`）或多图（`image_01.jpg` + `companion_files`）；自动生成 `cover.jpg` 原画封面、`content.md`、`content.info.json`；**B站提取 `.srt` 字幕**，**抖音提取 `audio.mp3` 原声**，**小红书实况图提取配套 `.mov`**。
+- **播客、音乐与音频**（小宇宙 / Apple Podcasts / 网易云音乐 / Spotify / Apple Music / 本地 `.ncm` 与 `.flac`）：输出 `.m4a` 或 `.mp3`（本地转换统一输出 `320kbps .mp3`）；配套生成播客 `content.md`（完整 Shownotes 与时间轴）、音乐 `.lrc` 歌词、高清专辑封面；加 `--transcribe` 生成 `.transcript.md`。
+- **文章与知识库**（微信公众号 / 知乎 / 掘金 / CSDN / 博客园 / Medium / Substack / 少数派 / 简书 / SegmentFault / 开源中国 / V2EX）：输出干净 Markdown `article.md`，防盗链配图全部本地化（`img_01.png`...）并重写相对路径；加 `--vault` 自动注入 YAML frontmatter 同步至 Obsidian。
+- **学术论文与电子书**（arXiv 链接或编号 / DOI / 10或13位 ISBN / 32位 MD5）：输出论文 `.pdf` 或电子书 `.epub` / `.pdf`；论文自动生成标准 `citation.bib` 引用文件与包含作者/摘要的 `content.md`。
+- **网盘分享**（百度网盘 / 夸克网盘）：自动识别内嵌提取码，支持子目录递归查找与云端临时目录自动清理；ZIP/TAR 默认安全解压并记录于 `extracted_files`。
+- **代码与安装包**（GitHub `blob` 单文件 / 微软商店链接或 12 位 Product ID / Android APK 包名或链接）：输出原代码文件、`.msixbundle`（限免费 MSIX/Appx 应用）或 `.apk`（基于 F-Droid/Aptoide 镜像），配套 `content.md` 提供 PowerShell 或 `adb install` 命令。
 
 ## 2. AI Agent 执行工作流（重要）
 
