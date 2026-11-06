@@ -192,7 +192,8 @@ def test_remote_download_requires_permission_before_environment_creation(monkeyp
     script.parent.mkdir(parents=True)
     shutil.copy(INSTALL_PATH, script)
     result = subprocess.run([sys.executable, str(script), "--venv", str(tmp_path / "venv")],
-                            input="", text=True, capture_output=True)
+                            input="", text=True, encoding="utf-8", capture_output=True,
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert result.returncode != 0
     assert "未获准联网" in result.stderr
     assert not (tmp_path / "venv").exists()
