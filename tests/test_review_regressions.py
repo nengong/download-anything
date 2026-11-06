@@ -327,7 +327,7 @@ def test_document_image_links_survive_full_pipeline(monkeypatch, tmp_path, drive
     with patch("cli.get_default_drivers", return_value=[driver()]):
         result = process_download(url, output_dir=str(tmp_path), agent_mode=True)
     primary = Path(result["primary_asset"])
-    text = primary.read_text()
+    text = primary.read_text(encoding="utf-8")
     import re
     links = re.findall(r'!\[[^\]]*\]\(([^)]+)\)', text)
     assert links

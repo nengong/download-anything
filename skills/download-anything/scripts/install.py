@@ -272,6 +272,11 @@ def _ensure_pip(python):
 
 
 def main():
+    # Legacy Windows consoles may not be able to encode the Chinese status text.
+    # Keep the console's encoding, but never let a progress message abort installation.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--venv", type=Path, default=Path.home() / ".download-anything" / "venv")
     parser.add_argument("--yes", action="store_true", help="自动安装 uv 和独立 Python，不再交互询问")

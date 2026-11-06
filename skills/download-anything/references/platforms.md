@@ -1,51 +1,45 @@
 # 支持的平台与能力分级清单
 
-本清单按 **内容形态（一级） → 目标平台（二级） → 具体交付能力与产物（三级）** 组织。命令行参数与 JSON 结构见 [cli.md](cli.md)。
+本清单按 **核心场景（一级） → 目标平台（二级，每个平台合并视频/图文等全部形态，不重复拆分） → 具体交付产物与边界（三级）** 组织。命令行参数与 JSON 结构见 [cli.md](cli.md)。
 
-## 1. 视频下载
+## 1. 视频、图文与社交平台（单入口自动识别形态）
 
 - **哔哩哔哩（B站）**
   - **支持输入**：标准视频链接（`bilibili.com/video/BV...`）、移动端分享文本、`b23.tv` 短链
   - **交付产物**：声画同步 `.mp4` 视频、高清封面 `cover.jpg`、`.srt` 标准时间轴字幕（自动转换 CC / AI 字幕）
-  - **附加能力**：支持 `-a` 直接提取独立 `.m4a` 纯音轨；伴生文件记录 UP 主、播放/点赞/投币/收藏等数据
-- **小红书（视频笔记）**
-  - **支持输入**：笔记详情链接、App 分享文本与 `xhslink.com` / `xhslink.cn` 短链
-  - **交付产物**：`.mp4` 视频、`cover.jpg` 封面、包含完整标题与正文及 `#话题标签` 的伴生 Markdown
+  - **附加能力**：支持 `-a` 直接提取独立 `.m4a` 纯音轨；配套元数据记录 UP 主、播放/点赞/投币/收藏等数据
+- **抖音（Douyin）**
+  - **支持输入**：App 整段分享口令文本（自动剥离前后乱码与数字前缀）、`v.douyin.com` 短链、`douyin.com/video/...` 或 `douyin.com/note/...` 链接
+  - **交付产物（自动识别视频或图文）**：
+    - **视频作品**：免水印高清 `.mp4` 视频（最高支持 4K 声画同步双轨）、高清原画封面 `cover.jpg`、独立背景音乐/原声音轨 `audio.mp3`
+    - **图文作品**：按顺序保存全部无水印高清 `.jpg` 图片及配套背景音乐 `audio.mp3`
+    - **结构化元数据**：包含完整标题、话题标签、作者 UID 与点赞数的 `content.md` / `content.info.json`
+- **小红书（Xiaohongshu）**
+  - **支持输入**：笔记详情链接、App 分享口令文本与 `xhslink.com` / `xhslink.cn` 短链
+  - **交付产物（自动识别视频、多图或实况图）**：
+    - **视频笔记**：无水印 `.mp4` 视频、`cover.jpg` 封面
+    - **多图与实况图（LivePhoto）**：按页面顺序保存全部高清 `.jpg` 图片（`image_01.jpg`...）；若含实况图，同步提取每一张对应的 `.mov` 动态视频流
+    - **结构化元数据**：包含完整标题、正文与 `#话题标签` 的 `content.md` / `content.info.json`
+- **X (Twitter)**
+  - **支持输入**：`x.com/<user>/status/<id>` 或 `twitter.com` 推文链接
+  - **交付产物（自动识别视频或多图）**：视频推文自动选轨合并高画质 `.mp4` 与 `cover.jpg`；多图推文自动过滤转推/评论干扰，按顺序提取原图级（`:orig`）高清图片；完整保留推文正文与互动计数
+- **微博（Weibo）**
+  - **支持输入**：`weibo.com` / `m.weibo.cn` 状态链接（支持自动生成访客会话免登录提取）
+  - **交付产物（自动识别视频或九宫格多图）**：视频微博输出声画同步 `.mp4`；多图微博按顺序保存全部高清大图（如九图帖完整 9 张原图）；同步保存微博正文与作者信息
+- **Instagram**
+  - **支持输入**：`instagram.com/reel/...`、`instagram.com/p/...` 链接
+  - **交付产物（自动识别 Reels 视频或 Carousel 多图）**：Reels 视频自动选轨合并 `.mp4` 与封面；多图帖配合本机已登录会话 Cookie（`DA_INSTAGRAM_COOKIE_FILE`）按顺序完整下载全部高清 `.jpg` 图片与帖子正文
 - **YouTube**
   - **支持输入**：`youtube.com/watch?v=...`、`youtu.be/...`、`youtube.com/shorts/...`
   - **交付产物**：自动选轨合并的声画同步 `.mp4` 视频、`cover.jpg` 封面、频道与简介元数据
-- **X (Twitter)**
-  - **支持输入**：`x.com/<user>/status/<id>` 或 `twitter.com` 推文链接
-  - **交付产物**：自动选轨合并的高画质 `.mp4` 视频、`cover.jpg` 封面、推文正文与互动计数
-- **微博（视频微博）**
-  - **支持输入**：`weibo.com` / `m.weibo.cn` 状态链接（支持自动生成访客会话免登录提取）
-  - **交付产物**：声画同步 `.mp4` 视频、微博正文 Markdown 与作者信息
-- **Instagram Reels**
-  - **支持输入**：`instagram.com/reel/...`、`instagram.com/p/...` 视频链接
-  - **交付产物**：自动选轨合并的 `.mp4` 视频、`cover.jpg` 封面与帖子描述
 - **TikTok**
   - **支持输入**：TikTok 公开视频链接
   - **交付产物**：`.mp4` 视频、`cover.jpg` 封面与文案说明
 - **通用流媒体（HLS / m3u8）**
   - **支持输入**：标准 `.m3u8` 播放列表链接
-  - **交付产物**：分片并发拉取并合并后的 `.mp4` 视频，自动通过 `ffprobe` 校验时长与音视频轨
+  - **交付产物**：分片拉取并合并后的 `.mp4` 视频，自动通过 `ffprobe` 校验时长与音视频轨
 
-## 2. 图片与图文图集
-
-- **小红书（多图与实况图笔记）**
-  - **支持输入**：图文笔记链接或 App 分享口令文本
-  - **交付产物**：按页面顺序命名的全部高清 `.jpg` 图片（`content.jpg`、`image_02.jpg`...）；若为实况图（LivePhoto），同步提取每一张对应的 `.mov` 动态视频流
-- **X (Twitter) 多图推文**
-  - **支持输入**：含单图或多图的推文链接
-  - **交付产物**：自动过滤转推/评论干扰，按顺序提取原图级（`:orig`）高清图片，完整保存推文正文
-- **微博多图（九宫格 / 相册）**
-  - **支持输入**：微博图文链接（免手动导入登录态）
-  - **交付产物**：按顺序保存全部 `.jpg` 大图（如九图帖完整 9 张原图），同步保存微博正文
-- **Instagram 多图帖（Carousel）**
-  - **支持输入**：Instagram 多图帖子链接（配合本机已登录会话 Cookie）
-  - **交付产物**：按顺序保存全部高清 `.jpg` 图片与帖子正文
-
-## 3. 音频、播客与音乐
+## 2. 播客、音乐与本地音频转换
 
 - **小宇宙播客（Xiaoyuzhou）**
   - **支持输入**：`xiaoyuzhoufm.com/episode/...` 单集链接
@@ -66,7 +60,7 @@
   - **支持输入**：任意音频任务或附加 `-a` 的视频任务（需配置 `GROQ_API_KEY`、`OPENAI_API_KEY` 或 `SILICONFLOW_KEY`）
   - **交付产物**：自动压缩超限音频并调用 Whisper 接口，输出带分段时间戳的 `<标题>.transcript.md`
 
-## 4. 文档、文章与知识库归档
+## 3. 公众号、技术文章与知识库归档
 
 - **微信公众号文章**
   - **支持输入**：`mp.weixin.qq.com/s/...` 文章链接
@@ -76,10 +70,8 @@
   - **交付产物**：剥离导航栏与脚本后的干净 `article.md`（保留多级标题与代码块）及本地化配图
 - **Obsidian 知识库同步（`--vault` / `--obsidian`）**
   - **交付产物**：将文章/媒体目录同步至指定 Obsidian Vault 的 `DownloadAnything/` 收件箱，自动在 Markdown 顶部注入标准 YAML frontmatter
-- **Notion 数据库同步（`--notion`）**
-  - **交付产物**：配置 `NOTION_API_KEY` 与 `NOTION_DATABASE_ID` 后，自动向指定数据库写入包含标题、平台、原始链接、封面与正文的页面记录
 
-## 5. 学术论文与电子书
+## 4. 学术论文与电子书
 
 - **arXiv 论文**
   - **支持输入**：`arxiv.org/abs/...`、`arxiv.org/pdf/...` 或纯编号（如 `2310.06825`）
@@ -88,10 +80,10 @@
   - **支持输入**：标准 DOI 标识符（如 `10.1186/...`）或 `doi.org` 链接
   - **交付产物**：通过 Crossref 与 Unpaywall 解析并下载开放获取全文 `.pdf`、自动生成官方 `citation.bib` 引用文件与论文元数据摘要
 - **电子书（ISBN / MD5）**
-  - **支持输入**：10/13 位 ISBN（如 `9780141439518`）、32 位 MD5 哈希、或 Anna's Archive / LibGen 链接
+  - **支持输入**：10/13 位 ISBN（如 `9780141439518`）、32 位 MD5 哈希、或 Anna's Archive / LibGen 链接（若仅提供书名，可由 Agent 先查询对应的 ISBN 或 MD5 再传入下载）
   - **交付产物**：自动探测容器真实格式并保存为 `.epub` 或 `.pdf`，对 EPUB 执行 OPF 清单、章节脊柱（spine）与本地资源完整性校验（支持纯文字、图文混排及扫描版/SVG 章节）
 
-## 6. 网盘分享文件
+## 5. 网盘分享文件
 
 - **百度网盘**
   - **支持输入**：`pan.baidu.com/s/...` 分享链接或带 `提取码: xxxx` 的分享文本
@@ -100,17 +92,16 @@
   - **支持输入**：`pan.quark.cn/s/...` 分享链接（支持多层子目录自动查找）
   - **交付产物**：读取本机登录态，自动在云端创建任务独占的 `_da_temp_<uuid>` 临时目录完成转存与高速直链下载，下载结束后自动清理云端临时目录
 
-## 7. 代码与开发资产
+## 6. 代码单文件与应用安装包
 
 - **GitHub 单文件**
   - **支持输入**：`github.com/<owner>/<repo>/blob/<branch>/<path>` 单文件链接
   - **交付产物**：免克隆整个仓库，直接按指定分支或 Commit 下载与原仓库逐字节一致的目标代码、配置或 Markdown 文件
-
-## 8. 应用与软件安装包
-
 - **微软商店（Microsoft Store）**
-  - **支持输入**：`apps.microsoft.com/detail/...` 链接或 12 位 Product ID（如 `9n0dx20hk701`）
-  - **交付产物**：从微软官方 CDN（`delivery.mp.microsoft.com`）直接拉取 `.msixbundle` / `.appxbundle` 离线安装包、应用图标及 PowerShell 安装说明
+  - **支持输入**：`apps.microsoft.com/detail/...` 链接或 12 位 Product ID（如 `9N0DX20HK701`）
+  - **交付产物**：借助 `store.rg-adguard.net` 解析并从微软官方 CDN（`delivery.mp.microsoft.com`）拉取 `.msixbundle` / `.appxbundle` 离线安装包、应用图标及 PowerShell 安装说明
+  - **适用边界**：仅适用于提供标准 MSIX/Appx 离线包的免费商店应用（不支持付费应用或仅提供传统 Win32 `.exe` 安装器的应用），且依赖第三方解析服务在线可用
 - **安卓应用（Android APK）**
-  - **支持输入**：`play.google.com/store/apps/details?id=...` 链接、APKPure/Aptoide 链接或直接传入包名（如 `com.spotify.music`）
-  - **交付产物**：从 F-Droid / Aptoide 官方镜像下载 `.apk` 安装包（经 ZIP/Manifest 结构校验）、应用图标及 `adb install` 命令行说明
+  - **支持输入**：`play.google.com/store/apps/details?id=...` 链接、APKPure/Aptoide 链接或直接传入包名（如 `org.videolan.vlc`、`com.spotify.music`）
+  - **交付产物**：从 F-Droid / Aptoide 公开镜像检索下载 `.apk` 安装包（经 ZIP/Manifest 结构校验）、应用图标及 `adb install` 命令行说明
+  - **适用边界**：能否获取及具体版本号取决于公开镜像源收录情况，结构校验不等同于开发者签名认证

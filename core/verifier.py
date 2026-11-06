@@ -365,8 +365,12 @@ class Verifier:
                 s.get("codec_type") == "video" for s in info.get("streams", [])
             ):
                 media_type = "audio"
-            streams = [s for s in info.get("streams", []) if s.get("codec_type") == media_type
-                       and not s.get("disposition", {}).get("attached_pic")]
+            media_streams = [
+                s for s in info.get("streams", [])
+                if s.get("codec_type") in ("video", "audio")
+                and not s.get("disposition", {}).get("attached_pic")
+            ]
+            streams = [s for s in media_streams if s.get("codec_type") == media_type]
             if not streams or not any(int(s.get("nb_read_packets", 0)) > 0 for s in streams):
                 raise ValueError(f"No readable {media_type} packets")
             fmt = info.get("format", {})
@@ -378,7 +382,8 @@ class Verifier:
                 "webm" if "webm" in container else container.split(",")[0])
             return VerificationResult(True, f"{media_type}/{name}", size, details={
                 "level": "media-structure", "duration_seconds": duration,
-                "container": container, "stream_count": len(streams),
+                "container": container, "stream_count": len(media_streams),
+                "has_audio": any(s.get("codec_type") == "audio" for s in media_streams),
             })
         except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
             return VerificationResult(False, f"corrupted_{media_type}", size, str(exc))

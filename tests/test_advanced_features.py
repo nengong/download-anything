@@ -186,9 +186,9 @@ def test_shadow_library_corrects_downloaded_ebook_suffix(tmp_path, ebook_payload
     assert not primary.with_suffix(f".{declared}").exists()
     assert result["verification"]["detected_type"] == actual
     for key in ("info_json", "named_info_json"):
-        metadata = json.loads(Path(result["sidecars"][key]).read_text())
+        metadata = json.loads(Path(result["sidecars"][key]).read_text(encoding="utf-8"))
         assert metadata["assets"]["primary"] == primary.name
-    assert primary.name in Path(result["sidecars"]["markdown"]).read_text()
+    assert primary.name in Path(result["sidecars"]["markdown"]).read_text(encoding="utf-8")
 
 
 def test_shadow_library_suffix_collision_preserves_existing_target(tmp_path, ebook_payload):

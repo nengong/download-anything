@@ -2,11 +2,11 @@
      width="1200" height="430" viewBox="0 0 1200 430"
      role="img" aria-labelledby="title desc">
   <title id="title">Download Anything 工作流与架构流水线</title>
-  <desc id="desc">展示从脏链接净化与智能路由、按内容类型提取、安全边界与格式级校验，到本地伴生元数据及 Markdown 与 Obsidian/Notion 归档的完整四步流程。</desc>
+  <desc id="desc">展示从脏链接净化与智能路由、按内容类型提取、安全边界与文件完整性校验，到本地结构化归档与 Obsidian 同步的完整四步流程。</desc>
 
   <defs>
     <linearGradient id="arch-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0B0F17"/>
+      <stop offset="0%" stop-color="#070B14"/>
       <stop offset="100%" stop-color="#111827"/>
     </linearGradient>
   </defs>
@@ -16,94 +16,94 @@
   <rect x="1" y="1" width="1198" height="428" rx="23" fill="none" stroke="#1E293B" stroke-width="2"/>
 
   <!-- Header -->
-  <text x="48" y="54" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="28" font-weight="700">四步闭环：从杂乱分享文本到可验证的本地资产</text>
-  <text x="1152" y="54" text-anchor="end" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">PIPELINE  ·  CLEAN → ROUTE → VERIFY → DELIVER</text>
+  <text x="44" y="54" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="26" font-weight="700">四步闭环：从杂乱分享口令到结构化本地归档</text>
+  <text x="1156" y="54" text-anchor="end" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">PIPELINE  ·  CLEAN → ROUTE → VERIFY → ARCHIVE</text>
 
-  <!-- Connecting Arrows Between 4 Stages (pure lines + polygons for universal SVG compatibility) -->
+  <!-- Connecting Arrows Between 4 Stages -->
   <g stroke="#38BDF8" stroke-width="2.5" fill="none">
-    <line x1="292" y1="226" x2="318" y2="226"/>
-    <line x1="582" y1="226" x2="608" y2="226"/>
-    <line x1="872" y1="226" x2="898" y2="226"/>
+    <line x1="292" y1="230" x2="318" y2="230"/>
+    <line x1="582" y1="230" x2="608" y2="230"/>
+    <line x1="872" y1="230" x2="898" y2="230"/>
   </g>
   <g fill="#38BDF8">
-    <polygon points="316,219 328,226 316,233"/>
-    <polygon points="606,219 618,226 606,233"/>
-    <polygon points="896,219 908,226 896,233"/>
+    <polygon points="316,223 328,230 316,237"/>
+    <polygon points="606,223 618,230 606,237"/>
+    <polygon points="896,223 908,230 896,237"/>
   </g>
 
   <!-- Stage 1: Input Purification -->
   <g transform="translate(42 84)">
-    <rect x="0" y="0" width="248" height="296" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+    <rect x="0" y="0" width="248" height="300" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
     <rect x="0" y="0" width="248" height="6" rx="3" fill="#38BDF8"/>
-    <text x="20" y="40" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">01 / CLEAN &amp; PARSE</text>
-    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="22" font-weight="700">智能输入净化</text>
+    <text x="20" y="40" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700">01 / CLEAN &amp; PARSE</text>
+    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="21" font-weight="700">口令与脏链接净化</text>
 
-    <rect x="18" y="94" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="122" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">剥离口令广告与表情</text>
+    <rect x="18" y="96" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="124" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">剥离口令乱码与推广词</text>
 
-    <rect x="18" y="148" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="176" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">自动识别内嵌提取码</text>
+    <rect x="18" y="150" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="178" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">自动提取内嵌网盘密码</text>
 
-    <rect x="18" y="202" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="230" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">支持 DOI / ISBN / MD5</text>
+    <rect x="18" y="204" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="232" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">识别 DOI / ISBN / MD5</text>
 
-    <text x="20" y="274" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">core/router.py</text>
+    <text x="20" y="278" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">core/router.py</text>
   </g>
 
   <!-- Stage 2: On-Demand Driver Dispatch -->
   <g transform="translate(332 84)">
-    <rect x="0" y="0" width="248" height="296" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+    <rect x="0" y="0" width="248" height="300" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
     <rect x="0" y="0" width="248" height="6" rx="3" fill="#A78BFA"/>
-    <text x="20" y="40" fill="#A78BFA" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">02 / EXTRACT</text>
-    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="22" font-weight="700">多源按需路由</text>
+    <text x="20" y="40" fill="#A78BFA" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700">02 / EXTRACT</text>
+    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="21" font-weight="700">多源按需提取</text>
 
-    <rect x="18" y="94" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="122" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">视频 / 多图 / 播客 / 音频</text>
+    <rect x="18" y="96" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="124" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">B站 / 抖音 / 小红书 / 播客</text>
 
-    <rect x="18" y="148" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="176" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">公众号 / 技术文 / 网盘</text>
+    <rect x="18" y="150" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="178" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">公众号 / 技术文 / 网盘</text>
 
-    <rect x="18" y="202" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="230" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">论文 / 电子书 / 安装包</text>
+    <rect x="18" y="204" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="232" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">论文 / 电子书 / 安装包</text>
 
-    <text x="20" y="274" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">drivers/* (on-demand)</text>
+    <text x="20" y="278" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">drivers/* (on-demand)</text>
   </g>
 
   <!-- Stage 3: Safety & Format Verification -->
   <g transform="translate(622 84)">
-    <rect x="0" y="0" width="248" height="296" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+    <rect x="0" y="0" width="248" height="300" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
     <rect x="0" y="0" width="248" height="6" rx="3" fill="#F59E0B"/>
-    <text x="20" y="40" fill="#F59E0B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">03 / GUARD &amp; VERIFY</text>
-    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="22" font-weight="700">安全边界与格式验收</text>
+    <text x="20" y="40" fill="#F59E0B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700">03 / GUARD &amp; VERIFY</text>
+    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="21" font-weight="700">安全边界与完整性校验</text>
 
-    <rect x="18" y="94" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="122" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">单文件默认 ≤ 500 MB</text>
+    <rect x="18" y="96" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="124" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">单文件默认 ≤ 500 MB</text>
 
-    <rect x="18" y="148" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="176" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">PDF / 图像 / 音视频校验</text>
+    <rect x="18" y="150" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="178" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">PDF / 图像 / 音视频双轨校验</text>
 
-    <rect x="18" y="202" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="230" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">受限解压防路径穿越</text>
+    <rect x="18" y="204" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="232" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">受限解压防路径穿越</text>
 
-    <text x="20" y="274" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">verifier.py + unpacker.py</text>
+    <text x="20" y="278" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">verifier.py + unpacker.py</text>
   </g>
 
   <!-- Stage 4: Local Archive & Knowledge Sync -->
   <g transform="translate(912 84)">
-    <rect x="0" y="0" width="248" height="296" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+    <rect x="0" y="0" width="248" height="300" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
     <rect x="0" y="0" width="248" height="6" rx="3" fill="#10B981"/>
-    <text x="20" y="40" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">04 / ARCHIVE &amp; SYNC</text>
-    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="22" font-weight="700">伴生归档与知识同步</text>
+    <text x="20" y="40" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="700">04 / ARCHIVE &amp; SYNC</text>
+    <text x="20" y="72" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="21" font-weight="700">结构化归档与知识同步</text>
 
-    <rect x="18" y="94" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="122" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">Markdown / 字幕 / 歌词</text>
+    <rect x="18" y="96" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="124" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">Markdown / .srt 字幕 / .bib</text>
 
-    <rect x="18" y="148" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="176" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">Obsidian / Notion / 转写</text>
+    <rect x="18" y="150" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="178" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">Obsidian 归档 / 语音转写</text>
 
-    <rect x="18" y="202" width="212" height="44" rx="8" fill="#1E293B"/>
-    <text x="30" y="230" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="18">SQLite 缓存与 JSON 报告</text>
+    <rect x="18" y="204" width="212" height="44" rx="8" fill="#1E293B"/>
+    <text x="30" y="232" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="16.5">SQLite 缓存与 JSON 协议</text>
 
-    <text x="20" y="274" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">sidecar.py + vault_sync.py</text>
+    <text x="20" y="278" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5">sidecar.py + vault_sync.py</text>
   </g>
 </svg>

@@ -1,5 +1,6 @@
 """Installer behavior that users hit before the CLI can start."""
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,30 @@ def load_install_module():
 
 
 install = load_install_module()
+
+
+def test_installer_status_does_not_crash_on_legacy_console(tmp_path):
+    script = '''
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("installer", sys.argv[1])
+installer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(installer)
+installer._find_compatible_python = lambda: ([sys.executable], (3, 12, 0))
+installer._create_venv = lambda *args, **kwargs: False
+sys.argv = [sys.argv[1], "--venv", sys.argv[2]]
+try:
+    installer.main()
+except SystemExit:
+    pass
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(INSTALL_PATH), str(tmp_path / "venv")],
+        env={**os.environ, "PYTHONIOENCODING": "cp1252:strict"},
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert b"[install]" in result.stdout
+    assert b"UnicodeEncodeError" not in result.stderr
 
 
 def test_windows_launcher_is_used_without_managed_python_or_prompt(monkeypatch, tmp_path):

@@ -29,7 +29,38 @@ def test_douyin_driver_can_handle():
     driver = DouyinDriver()
     assert driver.can_handle("https://v.douyin.com/iABC123/")
     assert driver.can_handle("https://www.douyin.com/video/7123456789012345678")
+    assert driver.can_handle("https://www.douyin.com/note/7123456789012345678")
     assert not driver.can_handle("https://www.bilibili.com/video/BV1xx411c7mD")
+
+
+def test_douyin_router_data_parser():
+    driver = DouyinDriver()
+    html = """
+    <html><head><script>
+    window._ROUTER_DATA = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[{
+      "aweme_id":"712345678901",
+      "desc":"示例短视频标题 #测试标签",
+      "author":{"nickname":"测试创作者","uid":"12345"},
+      "statistics":{"digg_count":888,"comment_count":66},
+      "video":{
+        "play_addr":{"uri":"v0200fg10000c123","url_list":["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v0200fg10000c123&ratio=1080p"]},
+        "cover":{"url_list":["https://p3-sign.douyinpic.com/thumb_640x360.jpeg"]},
+        "origin_cover":{"url_list":["https://p3-sign.douyinpic.com/origin_full_hd.jpeg"]}
+      },
+      "music":{"play_url":{"url_list":["https://sf3-cdn-tos.douyinstatic.com/obj/music.mp3"]}}
+    }]}}}}</script></head><body></body></html>
+    """
+    pkg = driver._extract_from_router_data(html, "https://v.douyin.com/iABC123/")
+    assert pkg is not None
+    assert pkg.platform == "douyin"
+    assert "示例短视频标题" in pkg.title
+    assert pkg.metadata["author"]["name"] == "测试创作者"
+    assert "play/?" in pkg.primary_asset.url
+    assert "playwm" not in pkg.primary_asset.url
+    filenames = [a.filename for a in pkg.assets]
+    assert "content.mp4" in filenames
+    assert "cover.jpg" in filenames
+    assert "audio.mp3" in filenames
 
 def test_bilibili_driver_can_handle():
     driver = BilibiliDriver()

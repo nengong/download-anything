@@ -1,153 +1,60 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Download Anything (DA) — 数字微资产提取与本地归档中枢，支持 CLI 与 AI Agent Skill 双入口">
+  <img src="./assets/readme/hero.svg" width="100%" alt="Download Anything (DA) — 面向个人与 AI Agent 的全能下载与结构化归档工具，支持 CLI 与 AI Agent Skill 双入口">
+</p>
+
+<p align="center">
+  <a href="#快速上手">快速上手</a> ·
+  <a href="#安装升级与卸载">安装部署</a> ·
+  <a href="#支持的能力全景">支持平台矩阵</a> ·
+  <a href="#工作机制与架构设计">架构与四步闭环</a> ·
+  <a href="./skills/download-anything/references/cli.md">CLI 与 JSON 协议</a>
 </p>
 
 # Download Anything (DA)
 
-**Download Anything (`da` / `dl`)** 是一个面向个人与 AI Agent 的数字微资产提取与本地归档工具，提供 **命令行 CLI** 与 **Agent Skill** 双入口。无论是日常刷到的视频与多图笔记、长播客、加密音频，还是公众号长文、技术博客、网盘分享小文件、学术论文、电子书、GitHub 单文件或应用安装包，丢给它即可完成**脏链接清洗、提取下载、格式级校验与本地知识库归档**。
+**Download Anything (`da` / `dl`)** 是一个**面向个人与 AI Agent 的全能下载与结构化归档工具**，提供 **命令行 CLI** 与 **Agent Skill** 双入口。
 
-## 支持的能力全景（三层结构）
+无论是日常刷到的 **B站 / 抖音 / 小红书 / YouTube / X 视频与多图实况**、**小宇宙与 Apple Podcasts 长播客**、**本地加密音频（NCM）**，还是 **微信公众号长文、技术博客、百度/夸克网盘分享、arXiv/DOI 学术论文、ISBN/MD5 电子书、GitHub 单文件或应用安装包**，直接把链接或杂乱的 App 分享口令丢给它，即可自动完成：
 
-完整输入输出规范见 [`skills/download-anything/references/platforms.md`](./skills/download-anything/references/platforms.md)。
-
-### 1. 视频下载
-- **哔哩哔哩（B站）**
-  - 解析标准视频链接、移动端分享口令与 `b23.tv` 短链
-  - 下载声画同步 `.mp4` 视频、高清封面 `cover.jpg` 及 UP 主互动数据
-  - 自动获取 CC / AI 字幕并转换为标准 `.srt` 时间轴字幕文件
-- **小红书**
-  - 解析网页链接与 App 分享短链（`xhslink.com` / `xhslink.cn`）
-  - 下载视频笔记 `.mp4`，完整保留标题、正文、话题标签与封面
-- **YouTube**
-  - 解析视频与短链，自动选轨合并声画同步 `.mp4` 并保存封面与简介
-- **X (Twitter)**
-  - 下载推文视频（自动选轨合并高画质 `.mp4`），同步保存推文正文与封面
-- **微博**
-  - 免手动导入登录态，直接下载微博视频 `.mp4` 并归档微博正文
-- **Instagram Reels**
-  - 下载 Reels 短视频（自动合并音视频轨输出 `.mp4`），保留描述与封面
-- **TikTok**
-  - 下载公开视频 `.mp4`，保留视频文案、标签与创作者信息
-- **通用流媒体（HLS / m3u8）**
-  - 支持标准 `.m3u8` 视频流分片拉取、自动合并与 `ffprobe` 轨道校验
-
-### 2. 图片与图文图集
-- **小红书多图与实况图（LivePhoto）**
-  - 按原笔记顺序批量下载全部高清 `.jpg` 图片
-  - 实况图笔记自动提取每一张图片配套的 `.mov` 动态视频流
-- **X (Twitter) 多图**
-  - 自动过滤转推与回复干扰，按顺序提取推文内全部原图级（`:orig`）图片并归档正文
-- **微博多图（九宫格 / 图集）**
-  - 免登录提取微博全部高清大图，按顺序落盘并保存正文说明
-- **Instagram 多图（Carousel）**
-  - 配合本机授权会话 Cookie，按顺序完整下载多图帖全部高清图片
-
-### 3. 音频、播客与音乐
-- **小宇宙播客**
-  - 下载单集原档音频（`.m4a` / `.mp3`）、单集封面，完整提取节目 Shownotes 与时间轴笔记
-- **Apple Podcasts**
-  - 解析播客单集链接，下载官方源站原档音频与封面，提取节目简介与发布信息
-- **哔哩哔哩纯音轨**
-  - 通过 `-a` 参数直接提取视频纯音轨（`.m4a` / `.mp3`）
-- **网易云音乐**
-  - 公开曲目直接下载 `.mp3` 与专辑封面，自动提取同步滚动歌词（`.lrc`）
-  - 受限曲目自动提取原版封面、`.lrc` 歌词与元数据，并通过公开音源匹配下载完整 `.mp3`
-- **Spotify & Apple Music**
-  - 提取官方曲目元数据与超清专辑封面（Apple Music 支持 `3000×3000`），通过公开音源匹配下载 `.mp3`
-- **本地加密与无损音频转换**
-  - **网易云 `.ncm` 解密**：还原为标准 `.mp3`，保留内嵌专辑封面与歌曲/歌手/专辑 ID3 标签
-  - **无损 `.flac` 转码**：转换为标准 `320kbps` `.mp3`（保留原文件）
-- **云端语音转写（`--transcribe`）**
-  - 配置 `GROQ_API_KEY`、`OPENAI_API_KEY` 或 `SILICONFLOW_KEY` 后，可将播客或音轨转写为带分段时间戳的 `.transcript.md` 文字稿
-
-### 4. 文档、文章与知识库归档
-- **微信公众号文章**
-  - 提取完整正文转换为干净 Markdown（`article.md`）
-  - 自动绕过微信防盗链，将正文内全部插图下载至本地并重写为相对路径引用
-- **主流技术社区与专栏文章**
-  - 支持知乎、掘金、CSDN、博客园、Medium、Substack、少数派、简书、SegmentFault、开源中国、V2EX
-  - 自动剥离页面导航与广告噪声，将正文代码块与配图本地化归档为 Markdown
-- **Obsidian 知识库同步（`--vault`）**
-  - 将下载的 Markdown、配图与伴生资产同步至本地 Obsidian Vault，自动注入 YAML frontmatter
-- **Notion 数据库同步（`--notion`）**
-  - 配置 `NOTION_API_KEY` 与 `NOTION_DATABASE_ID` 后，自动在 Notion 数据库创建归档页面
-
-### 5. 学术论文与电子书
-- **arXiv 学术论文**
-  - 支持 `arxiv.org/abs/...`、`arxiv.org/pdf/...` 或纯编号（如 `2310.06825`）
-  - 下载官方全文 `.pdf`，提取标题、作者与摘要，自动生成 `citation.bib` 引用文件
-- **DOI 开放获取论文**
-  - 识别标准 DOI（如 `10.1186/...`），查询 Crossref 与 Unpaywall 下载开放获取全文 `.pdf` 并生成 `citation.bib`
-- **电子书（ISBN / MD5）**
-  - 直接输入 10/13 位 ISBN（如 `9780141439518`）或 32 位 MD5，自动检索镜像下载 `.epub` / `.pdf` 电子书并执行容器结构校验
-
-### 6. 网盘分享文件
-- **百度网盘**
-  - 自动识别分享文本中的链接与 4 位提取码，支持 `--check` 预检文件大小，结合本机登录态下载分享原文件（ZIP / TAR 归档默认自动安全解压）
-- **夸克网盘**
-  - 自动读取登录态、递归查找分享子目录文件、转存至任务专属临时目录 `_da_temp_<uuid>`，下载完成后自动清理云端临时目录
-
-### 7. 代码与开发资产
-- **GitHub 单文件**
-  - 支持 `github.com/<owner>/<repo>/blob/<branch>/<path>` 链接
-  - 免 `git clone` 整个仓库，直接按指定分支或 Commit 精准拉取目标代码、配置或文档原文件
-
-### 8. 应用与软件安装包
-- **微软商店离线安装包（Microsoft Store）**
-  - 输入商店链接或 12 位 Product ID（如 `9n0dx20hk701`），直接从微软官方 CDN 下载 `.msixbundle` / `.appxbundle` 离线安装包及安装指引
-- **安卓应用安装包（Android APK）**
-  - 输入 Google Play 链接、APKPure/Aptoide 链接或应用包名（如 `com.spotify.music`），自动检索镜像下载 `.apk` 安装包并生成 ADB 安装命令
+1. **口令与脏链接剥离**：自动剔除分享文案中的乱码、表情与推广前缀，精准识别 URL、网盘提取码、DOI、ISBN 与 MD5。
+2. **主文件与结构化附件同步落盘**：除视频/音频/PDF 主文件外，自动提取配套的 `.srt` 字幕、`cover.jpg` 原画封面、`audio.mp3` 独立音轨、`citation.bib` 引用文件、防盗链本地化配图与 `.info.json` / `.md` 元数据，可直接喂给 AI Agent 总结或归档至 Obsidian。
+3. **文件完整性校验**：基于 `ffprobe` 校验音视频双轨与时长，基于 `pypdf` / `Pillow` / `zipfile` 校验文档、图像与 EPUB/ZIP 容器结构，杜绝将 HTML 报错页或残损文件误判为成功。
 
 ## 快速上手
 
-可以直接把分享文本、链接、DOI、ISBN、MD5 或本地 NCM、FLAC 文件交给 `da`：
+每个主流场景一条命令，直接把 App 分享口令、链接、DOI、ISBN、包名/Product ID 或本地音频路径交给 `da`：
 
 ```bash
-# 1. 下载 B站视频（自动保存封面与 .srt 字幕）
+# 1. 视频、多图与实况（B站 / 抖音 / 小红书 / YouTube / X，自动识别视频或图集并提取封面/字幕/原声）
 da "https://www.bilibili.com/video/BV1xx411c7mD" --json
+da "复制打开抖音，看看【示例作品】https://v.douyin.com/iABC123/" --json
+da "https://www.xiaohongshu.com/explore/654321abcdef" --json
 
-# 2. 粘贴带提取码的百度或夸克网盘分享文本
+# 2. 播客、音乐与本地加密音频（小宇宙 / Apple Podcasts / 网易云 .ncm 解密 / .flac 转 MP3）
+da "https://www.xiaoyuzhoufm.com/episode/65f..." --json
+da "/path/to/music.ncm" --json
+
+# 3. 公众号、技术文章与 Obsidian 归档（正文转干净 Markdown，防盗链配图自动本地化）
+da "https://mp.weixin.qq.com/s/..." --vault ~/Documents/MyVault --json
+
+# 4. 学术论文与电子书（arXiv / DOI 论文自动生成 citation.bib；支持按 ISBN / MD5 下载电子书）
+da "https://arxiv.org/abs/2310.06825" --json
+da "9780141439518" --json
+
+# 5. 网盘分享文件（自动识别百度/夸克网盘分享文本中的链接与提取码）
 da "通过网盘分享的文件：资料包.zip 链接: https://pan.baidu.com/s/1xxxx 提取码: a1b2" --json
 
-# 3. 下载 arXiv 或开放获取 DOI 学术论文（自动生成 citation.bib）
-da "https://arxiv.org/abs/2310.06825" --json
-
-# 4. 下载小宇宙或 Apple Podcasts 播客单集（含 Shownotes 与封面）
-da "https://www.xiaoyuzhoufm.com/episode/65f..." --json
-
-# 5. 将公众号或技术社区文章与配图同步至本地 Obsidian 知识库
-da "公众号文章链接" --vault ~/Documents/MyVault --json
-
-# 6. 按 ISBN 或 MD5 下载电子书
-da "9780141439518" --json
-da "51860b9694a6d153c4c305dcf3b9e10d" --json
-
-# 7. 本地 NCM 解密或 FLAC 转 320kbps MP3
-da "/path/to/music.ncm" --json
+# 6. GitHub 单文件与应用安装包（GitHub 单文件直下 / 微软商店 Product ID / Android APK 包名）
+da "https://github.com/psf/requests/blob/main/README.md" --json
+da "9N0DX20HK701" --json
 ```
-
-## 工作机制与架构设计
-
-<p align="center">
-  <img src="./assets/readme/architecture.svg" width="100%" alt="Download Anything 四步工作流：智能输入净化、按需路由、安全边界与格式校验、伴生元数据与知识库同步">
-</p>
-
-DA 将一次提取任务拆解为四个可验证阶段：
-
-1. **脏输入净化与智能路由（`core/router.py`）**：自动剔除分享文本中的推广词与表情符号，提取标准 URL 与内嵌密码（`提取码` / `pwd`），并识别学术 DOI、ISBN 与 MD5。
-2. **按需分发（`drivers/*`）**：按目标类型匹配专属驱动；作为 AI Skill 加载时仅暴露轻量路由描述，避免全量上下文占用。
-3. **安全边界与格式级校验（`core/verifier.py` & `core/unpacker.py`）**：
-   - 默认单文件下载上限 `500 MB`（可通过 `--max-mb N` 调整）。
-   - 针对 PDF（`pypdf`）、EPUB、图片（`Pillow`）、压缩包（`zipfile`）执行格式检查；借助 `ffprobe` 扫描音视频轨道与可读数据包（`media-structure` 级别）。
-   - 支持 `ZIP` / `TAR` 归档自动解压与路径边界检查（总量上限 `500 MB` / `10,000` 个成员），可通过 `--no-unzip` 保留原压缩包。
-4. **伴生资产与知识库归档（`core/sidecar.py` & `core/vault_sync.py`）**：主文件落盘后按需生成 `.info.json`、Markdown 正文、`.srt` 字幕、`.lrc` 歌词或 `citation.bib`，支持同步至 Obsidian / Notion 及云端 Whisper 语音转写（`--transcribe`），并通过 SQLite 本地索引（`~/.download-anything/index.db`）实现缓存复用。
 
 ## 安装、升级与卸载
 
 ### 环境要求
 
 - **Python**：`3.10` 或更高版本。安装脚本会优先查找本机已有的 Python 3.10+，未找到时可按提示通过 `uv` 准备独立的 Python 3.12（非交互环境加 `--yes`）。
-- **FFmpeg（音视频组件）**：用于 `ffprobe` 媒体结构校验、`ffmpeg` 抽轨与转码、HLS/DASH 流合并。
+- **FFmpeg（音视频组件）**：用于 `ffprobe` 媒体双轨结构校验、`ffmpeg` 抽轨与转码、HLS/DASH 流合并。
 
 ### 从源码或发布包安装
 
@@ -166,22 +73,77 @@ python3 skills/download-anything/scripts/install.py
 
 删除安装时创建的虚拟环境目录（如 `~/.download-anything/venv`）并移除对应的 `PATH` 配置即可。`~/.download-anything/index.db`（缓存索引）、`~/.download-anything/credentials.yaml`（`0600` 权限凭据配置）及已下载文件可按需保留或手动清理。
 
+## 工作机制与架构设计
+
+<p align="center">
+  <img src="./assets/readme/architecture.svg" width="100%" alt="Download Anything 四步工作流：口令与脏链接净化、多源按需提取、安全边界与完整性校验、结构化归档与知识同步">
+</p>
+
+DA 将一次提取任务拆解为四个可验证阶段：
+
+1. **口令与脏链接净化（`core/router.py`）**：自动剔除分享文本中的推广词、数字口令与表情符号，提取标准 URL 与内嵌密码（`提取码` / `pwd`），并识别学术 DOI、ISBN 与 MD5。
+2. **多源按需分发（`drivers/*`）**：按目标类型匹配专属驱动；同一社交平台（如小红书、抖音、X、微博、Instagram）自动识别视频、多图或实况图，无需手动指定模式。
+3. **安全边界与文件完整性校验（`core/verifier.py` & `core/unpacker.py`）**：
+   - 默认单文件下载上限 `500 MB`（可通过 `--max-mb N` 调整）。
+   - 针对 PDF（`pypdf`）、EPUB、图片（`Pillow`）、压缩包（`zipfile`）执行格式检查；借助 `ffprobe` 扫描音视频轨道与可读数据包（`media-structure` 级别，统计有效音视频流数量与 `has_audio` 状态）。
+   - 支持 `ZIP` / `TAR` 归档自动解压与路径边界检查（总量上限 `500 MB` / `10,000` 个成员），可通过 `--no-unzip` 保留原压缩包。
+4. **结构化归档与知识库同步（`core/sidecar.py` & `core/vault_sync.py`）**：主文件落盘后按需生成 `.info.json`、Markdown 正文、`.srt` 字幕、`.lrc` 歌词或 `citation.bib`，支持同步至本地 Obsidian 知识库及云端 Whisper 语音转写（`--transcribe`），并通过 SQLite 本地索引（`~/.download-anything/index.db`）实现缓存复用。
+
+## 支持的能力全景（按平台一站式归类）
+
+完整输入输出规范见 [`skills/download-anything/references/platforms.md`](./skills/download-anything/references/platforms.md)。
+
+| 领域 | 覆盖平台 | 支持形态与主产物 | 自动生成的配套结构化文件 |
+| :--- | :--- | :--- | :--- |
+| **1. 视频、图文与社交** | B站、抖音、小红书、YouTube、X、微博、Instagram、TikTok、HLS (`.m3u8`) | 自动识别视频（`.mp4`）、多图（`image_01.jpg`...）或实况图（`.jpg`+`.mov`）；加 `-a` 提取纯音轨 | `cover.jpg` 原画封面、`content.md`、`.info.json`；B站 `.srt` 字幕；抖音 `audio.mp3` 独立原声 |
+| **2. 播客、音乐与本地音频** | 小宇宙、Apple Podcasts、网易云音乐、Spotify、Apple Music、本地 `.ncm`/`.flac` | 播客原档 `.m4a`/`.mp3`、音乐与转码 `320kbps .mp3` | 播客 Shownotes 与时间轴 Markdown、音乐 `.lrc` 滚动歌词、高清专辑封面、可选 `.transcript.md` |
+| **3. 公众号、技术文与知识库** | 微信公众号、知乎、掘金、CSDN、博客园、Medium、Substack、少数派、简书、V2EX 等 | 干净 Markdown `article.md` | 防盗链插图全部本地化（`img_01.png`...）并重写相对路径；支持 `--vault` 同步至 Obsidian |
+| **4. 学术论文与电子书** | arXiv 论文、DOI 开放获取论文、ISBN / MD5 电子书 | 全文 `.pdf`、电子书 `.epub` / `.pdf` | 论文自动生成标准 `citation.bib` 引用文件与包含作者/摘要的 Markdown |
+| **5. 网盘分享文件** | 百度网盘（自动识别提取码）、夸克网盘（自动转存下载并清理云端临时目录） | 分享原文件 | ZIP/TAR 自动安全解压清单 `extracted_files`、`.info.json` |
+| **6. 代码单文件与安装包** | GitHub 单文件、微软商店（Product ID/链接）、Android APK（包名/Play 链接） | 原代码文件、`.msixbundle`、`.apk` | 应用图标、PowerShell 离线安装指引或 `adb install` 命令行说明 |
+
+### 1. 视频、图文与社交平台（单平台全形态自适应）
+- **哔哩哔哩（B站）**：支持标准链接、移动端分享口令与 `b23.tv` 短链；下载声画同步 `.mp4`（加 `-a` 直接提取 `.m4a` 纯音轨）、高清封面 `cover.jpg` 及 UP 主互动数据；自动获取 CC / AI 字幕并转换为标准 `.srt` 时间轴字幕。
+- **抖音（Douyin）**：支持 App 整段分享口令、`v.douyin.com` 短链与网页视频/图文链接；自动识别**视频**（提取免水印最高 4K `.mp4` + 原画封面 `cover.jpg`）或**图文笔记**（按序下载全部无水印高清大图），并同步提取独立 BGM/原声音轨 `audio.mp3` 与作品文案。
+- **小红书**：支持网页链接与 App 分享口令（`xhslink.com` / `xhslink.cn`）；自动识别**视频笔记**（无水印 `.mp4`）、**多图笔记**（按原顺序下载全部高清 `.jpg`）或**实况图 LivePhoto**（同步提取每张图配套的 `.mov` 动态视频流），完整保留标题、正文与 `#话题标签`。
+- **X (Twitter) / 微博 / Instagram**：同一个链接入口自动识别**视频**（选轨合并高画质 `.mp4`）或**多图帖**（X `:orig` 原图、微博免登录九宫格大图、Instagram Carousel 多图），同步归档正文与作者信息。
+- **YouTube / TikTok / 通用 HLS (`.m3u8`)**：自动选轨或分片并发拉取合并为声画同步 `.mp4`，保存封面与简介并通过 `ffprobe` 双轨校验。
+
+### 2. 播客、音乐与本地音频转换
+- **小宇宙 & Apple Podcasts**：下载单集原档音频（`.m4a` / `.mp3`）与高清封面，完整提取节目 Shownotes、简介与时间轴笔记。
+- **网易云音乐 / Spotify / Apple Music**：公开曲目直接下载 `.mp3`、超清专辑封面（Apple Music 支持 `3000×3000`）与同步滚动歌词（`.lrc`）；受限曲目自动提取官方封面、歌词与元数据并通过公开音源匹配下载完整 `.mp3`。
+- **本地加密与无损音频转换**：网易云 `.ncm` 本地解密还原为标准 `.mp3`（保留内嵌专辑封面与 ID3 标签）；无损 `.flac` 转换为标准 `320kbps` `.mp3`（保留原文件）。
+- **云端语音转写（`--transcribe`）**：配置 `GROQ_API_KEY`、`OPENAI_API_KEY` 或 `SILICONFLOW_KEY` 后，可将播客或视频音轨（`-a --transcribe`）转写为带分段时间戳的 `.transcript.md` 文字稿。
+
+### 3. 公众号、技术文章与知识库归档
+- **微信公众号文章**：提取完整正文转换为干净 Markdown（`article.md`），自动绕过微信防盗链将全部插图下载至本地并重写为相对路径引用。
+- **主流技术社区与专栏文章**：支持知乎、掘金、CSDN、博客园、Medium、Substack、少数派、简书、SegmentFault、开源中国、V2EX；剥离页面导航与广告噪声，将正文代码块与配图本地化归档。
+- **Obsidian 知识库同步（`--vault`）**：将下载的 Markdown、本地化配图与配套元数据同步至本地 Obsidian Vault，自动注入标准 YAML frontmatter。
+
+### 4. 学术论文与电子书
+- **arXiv & DOI 开放获取论文**：支持 `arxiv.org/abs/...`、纯编号（如 `2310.06825`）或标准 DOI（如 `10.1186/...`）；下载经 `pypdf` 校验的全文 `.pdf`，提取标题、作者与摘要，自动生成标准 `citation.bib` 引用文件。
+- **电子书（ISBN / MD5）**：直接输入 10/13 位 ISBN（如 `9780141439518`）或 32 位 MD5（或由 Agent 根据书名查出 ISBN / MD5 后传入），自动检索镜像下载 `.epub` / `.pdf` 并执行 OPF 清单、章节脊柱与资源完整性校验。
+
+### 5. 网盘、代码单文件与应用安装包
+- **百度网盘 & 夸克网盘**：自动识别分享文本中的链接与提取码，支持 `--check` 预检文件大小（不触发转存）；夸克网盘支持递归查找子目录文件、转存至任务专属临时目录 `_da_temp_<uuid>` 并在下载完成后自动清理云端临时目录。
+- **GitHub 单文件**：支持 `github.com/<owner>/<repo>/blob/<branch>/<path>` 链接，免 `git clone` 整个仓库直接按指定分支或 Commit 拉取目标原文件。
+- **微软商店离线包（Microsoft Store）**：输入商店链接或 12 位 Product ID（如 `9N0DX20HK701` Windows Terminal），借助第三方目录解析服务获取微软官方 CDN（`delivery.mp.microsoft.com`）上的 `.msixbundle` / `.appxbundle` 离线安装包与 PowerShell 安装说明（仅适用于提供标准 MSIX/Appx 离线包的免费应用，不支持付费应用或传统 Win32 `.exe` 安装器）。
+- **安卓应用安装包（Android APK）**：输入 Google Play 链接、APKPure/Aptoide 链接或直接传入包名（如 `org.videolan.vlc`），从 F-Droid / Aptoide 公开镜像检索下载经结构校验的 `.apk` 安装包与 `adb install` 命令（版本取决于公开镜像收录情况）。
+
 ## 常用参数与自动化结果协议
 
 详细 CLI 规范见 [`skills/download-anything/references/cli.md`](./skills/download-anything/references/cli.md)。
 
-### JSON 状态与退出码协议
-
 | `status` 字段 | 单任务退出码 | 含义 |
 | :--- | :---: | :--- |
-| `success` | `0` | 主文件通过格式校验，伴生附件及后续同步步骤均已完成 |
+| `success` | `0` | 主文件通过完整性校验，配套附件及后续同步步骤均已完成 |
 | `cached` | `0` | 命中本地缓存记录（`cached-existence`），直接复用已有文件 |
 | `dry_run` | `0` | 完成 `--check` 元数据预检 |
-| `partial` | `2` | 主文件已保存，部分伴生附件、同步或临时目录清理未完成；详见 `warnings` 与 `operations` |
+| `partial` | `2` | 主文件已保存，部分配套附件、同步或临时目录清理未完成；详见 `warnings` 与 `operations` |
 | `error` | `1` | 下载或主文件校验失败；详见 `error_type` 与 `message` |
 
 - **批量任务退出码**：批量结果（`-i links.txt`）若包含 `partial` 项则返回 `2`；否则至少一项成功返回 `0`，全部失败返回 `1`。
-- **校验级别**：`verification.details.level` 标识实际执行的检查级别（如音视频 `media-structure`、常规格式 `basic`、缓存复用 `cached-existence`）。
+- **校验级别**：`verification.details.level` 标识实际执行的检查级别（如音视频 `media-structure`，含 `stream_count` 与 `has_audio`；常规格式 `basic`；缓存复用 `cached-existence`）。
 
 ## 开发与打包
 

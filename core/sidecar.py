@@ -92,12 +92,12 @@ class SidecarWriter:
         md_lines = [
             f"# {package.title}",
             "",
-            "> **资产元数据速览**",
+            "> **文件元数据速览**",
             f"> - **平台来源**：`{package.platform}`",
             f"> - **作者**：`{info_data['author'].get('name', 'Unknown')}`",
             f"> - **原始链接**：<{info_data['original_url']}>",
             f"> - **提取时间**：`{now_iso}`",
-            f"> - **主资产文件**：`{primary_filename}`",
+            f"> - **主文件**：`{primary_filename}`",
             ""
         ]
 
