@@ -20,16 +20,27 @@ description: 面向个人与 AI Agent 的全能下载与结构化归档工具。
 
 ## 2. AI Agent 执行工作流（重要）
 
-### 第一步：前置转换与工具边界判断
+### 第一步：环境检查与安装确认（首次调用必检）
+在执行下载前，**先确认本机是否已安装 `da` 及其运行依赖，未安装时必须先询问用户确认，不要静默修改系统环境**：
+
+1. **定位可执行文件**：优先查找 `PATH` 中的 `da`（或 `dl`），若无则检查默认独立虚拟环境 `~/.download-anything/venv/bin/da`（Windows 为 `%USERPROFILE%\.download-anything\venv\Scripts\da.exe`）。
+2. **未安装 `da` 或缺少 Python 3.10+ 时（先询问用户）**：
+   - 若上述路径均不存在，先检查本机是否有 `python3`（需 `3.10` 及以上版本；注意 macOS 系统自带 `python3` 常为 `3.9`）。
+   - **主动向用户询问确认**：告知用户本机尚未初始化 `da` 运行环境（或缺少 Python 3.10+），询问是否允许运行本 Skill 目录下的安装脚本 `python3 <Skill目录>/scripts/install.py`（若无 Python 3.10+，脚本可通过 `uv` 下载独立的 Python 3.12 并创建 `~/.download-anything/venv` 隔离环境，不污染系统 Python）。**待用户同意后**，再执行 `python3 <Skill目录>/scripts/install.py --yes`。
+3. **运行环境自检（`da doctor --json`）**：
+   - 首次安装后或遇到环境报错时，运行 `da doctor --json` 检查 `all_required_ok` 与 `media_ready`。
+   - **缺少 Python 依赖包**：若 `all_required_ok` 为 `false`，询问用户后运行 `da doctor --fix --json` 自动补齐（官方 PyPI 超时会自动切换清华/阿里云镜像）。
+   - **音视频任务缺少 `ffmpeg` / `ffprobe`**：若当前任务涉及视频或音频，而 `media_ready` 为 `false`（未安装 FFmpeg），请明确告知用户“文档、图片、论文、电子书与网盘功能不受影响，但音视频合并、转码与双轨校验需要 FFmpeg”，并**询问用户是否需要代为执行安装命令**（macOS：`brew install ffmpeg`；Windows：`winget install -e --id Gyan.FFmpeg`；Linux：`sudo apt install ffmpeg`）。
+
+### 第二步：前置转换与工具边界判断
 当用户只提供名称而非直接链接/ID 时，**Agent 应先自行检索出精确标识符，再传给 `da`**：
 - **电子书**：若用户只给书名（如“帮我下《傲慢与偏见》英文原版”），不要直接传书名模糊搜索；请先查出该书目标版本的 **10/13 位 ISBN**（如 `9780141439518`）或 **32 位 MD5**，再执行 `da "<ISBN或MD5>" --json`。
 - **学术论文**：若用户只给论文标题，先查出对应的 **arXiv 编号**（如 `2310.06825`）或 **开放获取 DOI**，再执行 `da "<arXiv编号或DOI>" --json`。
 - **应用安装包**：若用户只给应用名称，先查出对应的 **Android 包名**（如 `org.videolan.vlc`）或 **Microsoft Store 12 位 Product ID**（如 `9N0DX20HK701`），再交给 `da`。
 - **GitHub 仓库与目录**：若用户需要克隆整个仓库或拉取多文件目录，优先使用环境中已有的 `gh` CLI、`git` 或 GitHub MCP；仅单文件直下（`github.com/.../blob/...`）使用 `da`。
 
-### 第二步：执行下载命令
-1. 优先调用 `PATH` 中的 `da`（或 `dl`），若未配置 `PATH` 则调用 `~/.download-anything/venv/bin/da`（Windows 为 `%USERPROFILE%\.download-anything\venv\Scripts\da.exe`）。首次使用未安装时，运行本 Skill 目录下的 `scripts/install.py --yes`，并用 `da doctor --json` 核对环境（音视频需系统有 `ffmpeg`/`ffprobe`）。
-2. **自动化调用始终附加 `--json`**，从 `stdout` 解析结构化 JSON：
+### 第三步：执行下载命令
+**自动化调用始终附加 `--json`**，从 `stdout` 解析结构化 JSON：
 
 ```bash
 # 通用下载（直接传入分享口令、URL、DOI、ISBN、MD5、包名/Product ID 或本地音频路径）
@@ -51,7 +62,7 @@ da login <平台名称> --json
 
 可选参数：`-o <目录>` 指定输出目录，`-p <密码>` 指定提取码或解压密码，`-f` 忽略缓存强制重下，`--max-mb N` 调整单文件大小上限（默认 500 MB），`--no-unzip` 保留原压缩包不自动解压，`--no-sidecar` 不生成额外配套文件。
 
-### 第三步：消费结构化归档产物（赋能下游分析）
+### 第四步：消费结构化归档产物（赋能下游分析）
 下载完成后，**不要直接读取 `.mp4` / `.m4a` 等二进制媒体文件**，应直接利用 JSON 返回的结构化文本文件完成用户的总结、提炼或问答需求：
 - **总结视频 / 播客**：直接读取 JSON 中 `sidecars.subtitle`（`.srt` 字幕）、`sidecars.transcript`（`.transcript.md` 转写稿）或 `sidecars.markdown`（节目 Shownotes、视频简介、时间戳与互动数据）。
 - **精读公众号 / 技术文章**：直接读取 `primary_asset`（`article.md`），正文内插图已转为同目录下的本地图片文件。
