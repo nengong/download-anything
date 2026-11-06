@@ -174,3 +174,25 @@ def test_install_reports_failure_after_all_sources(monkeypatch):
     )
     assert ok is False
     assert len(calls) == 1 + len(install.PYPI_MIRRORS)
+
+
+def test_remote_sources_pin_the_same_release_and_try_wheels_before_git():
+    wheel, mirror_wheel, git, mirror_git = install._remote_packages()
+    tag = "v" + install.SKILL_VERSION
+    assert tag in wheel and tag in mirror_wheel and tag in git and tag in mirror_git
+    assert wheel.endswith("download_anything-%s-py3-none-any.whl" % install.SKILL_VERSION)
+    assert mirror_wheel == "https://gh-proxy.com/" + wheel
+    assert git.endswith(".git@" + tag)
+    assert mirror_git.startswith("git+https://gh-proxy.com/")
+
+
+def test_remote_download_requires_permission_before_environment_creation(monkeypatch, tmp_path):
+    import shutil
+    script = tmp_path / "download-anything" / "scripts" / "install.py"
+    script.parent.mkdir(parents=True)
+    shutil.copy(INSTALL_PATH, script)
+    result = subprocess.run([sys.executable, str(script), "--venv", str(tmp_path / "venv")],
+                            input="", text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "未获准联网" in result.stderr
+    assert not (tmp_path / "venv").exists()

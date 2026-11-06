@@ -20,6 +20,25 @@
 2. **主文件与结构化附件同步落盘**：除视频/音频/PDF 主文件外，自动提取配套的 `.srt` 字幕、`cover.jpg` 原画封面、`audio.mp3` 独立音轨、`citation.bib` 引用文件、防盗链本地化配图与 `.info.json` / `.md` 元数据，可直接喂给 AI Agent 总结或归档至 Obsidian。
 3. **文件完整性校验**：基于 `ffprobe` 校验音视频双轨与时长，基于 `pypdf` / `Pillow` / `zipfile` 校验文档、图像与 EPUB/ZIP 容器结构，杜绝将 HTML 报错页或残损文件误判为成功。
 
+## 让 Agent 帮你安装
+
+把这句话发给 Claude Code、Codex 等 Agent：
+
+```text
+帮我安装这个 Skill：https://github.com/nengong/download-anything.git
+```
+
+**给 Agent 的安装步骤：**
+
+已有同名目录或环境时，先检查并保留原有内容。
+
+1. 克隆仓库到持久位置，例如 `~/.download-anything/source`。
+2. 检查 Python 3.10+。缺少时先询问用户，再按安装脚本提示准备 Python；运行仓库中的 `python3 skills/download-anything/scripts/install.py`。用户已同意安装且需要非交互执行时可以加 `--yes`。默认安装位置为 `~/.download-anything/venv`。
+3. 将仓库的 `skills/download-anything` **整个文件夹**复制或链接到当前 Agent 的用户级技能目录：Codex 为 `~/.agents/skills/download-anything`，Claude Code 为 `~/.claude/skills/download-anything`。其他 Agent 放进该 Agent 的 skills 目录，不确定就问用户。链接应指向持久位置；新开会话加载 Skill。
+4. 运行 `~/.download-anything/venv/bin/da doctor --json`（Windows：`%USERPROFILE%\\.download-anything\\venv\\Scripts\\da.exe doctor --json`），确认 `all_required_ok` 为 `true`。`da` 不在 PATH 时使用完整路径。音视频任务缺 FFmpeg 时，告知用户并询问后再安装。
+
+也可以用 `npx skills add nengong/download-anything` 选择 Agent 安装 Skill；它只负责安装 Skill，仍需运行 Skill 中的 `scripts/install.py` 安装 CLI 并执行自检。Node.js 要求见 [skills 项目](https://github.com/vercel-labs/skills)。
+
 ## 快速上手
 
 每个主流场景一条命令，直接把 App 分享口令、链接、DOI、ISBN、包名/Product ID 或本地音频路径交给 `da`：

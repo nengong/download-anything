@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the bundled wheel (or this source checkout) using only Python stdlib."""
+"""Install DA from a bundled wheel, source checkout, or matching release."""
 import argparse
 import os
 from pathlib import Path
@@ -10,6 +10,8 @@ import sys
 import sysconfig
 
 MIN_PYTHON = (3, 10)
+SKILL_VERSION = "0.1.1"
+REPOSITORY = "https://github.com/nengong/download-anything"
 MANAGED_PYTHON = "3.12"
 # Official PyPI first, then the mirrors most likely to work from mainland China.
 PYPI_MIRRORS = (
@@ -271,6 +273,14 @@ def _ensure_pip(python):
         subprocess.run([str(python), "-m", "ensurepip", "--upgrade"], check=True)
 
 
+def _remote_packages():
+    tag = "v" + SKILL_VERSION
+    wheel = "%s/releases/download/%s/download_anything-%s-py3-none-any.whl" % (REPOSITORY, tag, SKILL_VERSION)
+    git = REPOSITORY + ".git@" + tag
+    return [wheel, "https://gh-proxy.com/" + wheel,
+            "git+" + git, "git+https://gh-proxy.com/" + git]
+
+
 def main():
     # Legacy Windows consoles may not be able to encode the Chinese status text.
     # Keep the console's encoding, but never let a progress message abort installation.
@@ -279,7 +289,7 @@ def main():
             stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--venv", type=Path, default=Path.home() / ".download-anything" / "venv")
-    parser.add_argument("--yes", action="store_true", help="自动安装 uv 和独立 Python，不再交互询问")
+    parser.add_argument("--yes", action="store_true", help="允许联网获取 CLI、uv 和独立 Python，不再交互询问")
     args = parser.parse_args()
     skill_dir = Path(__file__).resolve().parents[1]
     wheels = sorted((skill_dir / "assets").glob("download_anything-*.whl"))
@@ -289,7 +299,9 @@ def main():
     elif (source / "pyproject.toml").is_file() and (source / "cli.py").is_file():
         package = str(source)
     else:
-        parser.error("No bundled CLI wheel found. Obtain the complete Skill release ZIP or a source checkout.")
+        package = None
+        if not args.yes and not _confirm("未找到本地 CLI，是否联网下载匹配版本 v%s？[Y/n] " % SKILL_VERSION):
+            sys.exit("未获准联网下载 CLI；请使用完整发布包或重新运行并确认。")
 
     target = args.venv.expanduser().resolve()
     python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -333,11 +345,18 @@ def main():
     uv = uv or _locate_uv()
     if uv:
         base = [uv, "pip", "install", "--python", str(python)]
-        installed = _install_with_mirrors(base, [package], False, "安装 DA 与依赖")
+        pip_timeout = False
     else:
         _ensure_pip(python)
         base = [str(python), "-m", "pip", "install", "--disable-pip-version-check"]
-        installed = _install_with_mirrors(base, [package], True, "安装 DA 与依赖")
+        pip_timeout = True
+    installed = False
+    for candidate in [package] if package else _remote_packages():
+        if _install_with_mirrors(base, [candidate], pip_timeout, "安装 DA 与依赖"):
+            installed = True
+            break
+        if not package:
+            print("[install] 尝试下一个匹配版本的下载地址……", flush=True)
     if not installed:
         sys.exit("安装失败。请检查网络；如使用自定义源，可设置 DA_PIP_INDEX_URL 后重试。")
 

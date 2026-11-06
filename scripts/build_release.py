@@ -90,6 +90,9 @@ def main():
     output = ROOT / "dist"
     output.mkdir(exist_ok=True)
     version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M)[1]
+    installer = (ROOT / "skills/download-anything/scripts/install.py").read_text(encoding="utf-8")
+    if not re.search(r'^SKILL_VERSION = "' + re.escape(version) + r'"$', installer, re.M):
+        raise RuntimeError("Installer SKILL_VERSION must match project version")
     wheel = output / f"download_anything-{version}-py3-none-any.whl"
     uv = shutil.which("uv")
     built_via_tool = False
