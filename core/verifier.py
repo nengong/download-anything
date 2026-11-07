@@ -137,6 +137,8 @@ class Verifier:
             return cls._verify_pdf(file_path, head, tail, actual_size)
         elif ext in ("epub", "zip"):
             return cls._verify_zip_container(file_path, actual_size, is_epub=(ext == "epub"))
+        elif ext in ("ttf", "otf", "ttc", "woff", "woff2"):
+            return cls._verify_font(head, actual_size, ext)
         elif ext in ("jpg", "jpeg", "png", "webp", "gif"):
             return cls._verify_image(file_path, head, actual_size, ext)
         elif ext in ("mp4", "m4v", "mov", "mkv", "webm", "avi", "flv", "ts"):
@@ -150,6 +152,45 @@ class Verifier:
             detected_type=f"binary/{ext or 'generic'}",
             size_bytes=actual_size,
             details={"level": "basic", "head_sample": head[:16].hex()}
+        )
+
+    @classmethod
+    def _verify_font(cls, head: bytes, size: int, ext: str) -> VerificationResult:
+        if len(head) < 4:
+            return VerificationResult(
+                valid=False,
+                detected_type=f"corrupted_font_{ext}",
+                size_bytes=size,
+                error_message="Font file is truncated (< 4 bytes)"
+            )
+        if b"File size exceeded the configured limit" in head[:256] or head.lstrip().startswith(b"{"):
+            return VerificationResult(
+                valid=False,
+                detected_type=f"corrupted_font_{ext}",
+                size_bytes=size,
+                error_message="CDN returned an error payload instead of a valid font binary"
+            )
+        magic = head[:4]
+        valid_magics = {
+            "ttf": (b"\x00\x01\x00\x00", b"true", b"typ1", b"OTTO"),
+            "otf": (b"OTTO", b"\x00\x01\x00\x00"),
+            "ttc": (b"ttcf",),
+            "woff": (b"wOFF",),
+            "woff2": (b"wOF2",),
+        }
+        expected_tuple = valid_magics.get(ext, ())
+        if expected_tuple and magic not in expected_tuple:
+            return VerificationResult(
+                valid=False,
+                detected_type=f"corrupted_font_{ext}",
+                size_bytes=size,
+                error_message=f"Invalid {ext.upper()} font magic bytes: {magic.hex()}"
+            )
+        return VerificationResult(
+            valid=True,
+            detected_type=f"font/{ext}",
+            size_bytes=size,
+            details={"level": "font-magic", "magic": magic.hex()}
         )
 
     @classmethod

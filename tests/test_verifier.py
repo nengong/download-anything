@@ -131,3 +131,30 @@ def test_verify_size_mismatch(tmp_path):
     res = Verifier.verify(file_path, expected_size=100)
     assert not res.valid
     assert res.detected_type == "size_mismatch"
+
+
+def test_verify_font_magic_bytes_and_jsdelivr_limit_trap(tmp_path):
+    ttf_file = tmp_path / "LXGWWenKai-Regular.ttf"
+    ttf_file.write_bytes(b"\x00\x01\x00\x00\x00\x10\x01\x00\x00\x04\x00\x00GPOS")
+    res_ttf = Verifier.verify(ttf_file)
+    assert res_ttf.valid
+    assert res_ttf.detected_type == "font/ttf"
+
+    otf_file = tmp_path / "NotoSansCJKsc-Regular.otf"
+    otf_file.write_bytes(b"OTTO\x00\x12\x01\x00\x00\x04\x00\x20CFF ")
+    res_otf = Verifier.verify(otf_file)
+    assert res_otf.valid
+    assert res_otf.detected_type == "font/otf"
+
+    woff2_file = tmp_path / "Inter.woff2"
+    woff2_file.write_bytes(b"wOF2\x00\x01\x00\x00\x00\x00\x12\x34")
+    res_woff2 = Verifier.verify(woff2_file)
+    assert res_woff2.valid
+    assert res_woff2.detected_type == "font/woff2"
+
+    trap_file = tmp_path / "TooLarge.ttf"
+    trap_file.write_bytes(b"File size exceeded the configured limit of 20 MB.")
+    res_trap = Verifier.verify(trap_file)
+    assert not res_trap.valid
+    assert "corrupted_font" in res_trap.detected_type
+

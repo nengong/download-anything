@@ -2,17 +2,21 @@
 GitHub Single Directory and File Precision Extractor Driver
 """
 import re
+from pathlib import Path
 from typing import Optional, List
+from urllib.parse import unquote, urlparse
 import requests
 
 from core.exceptions import ExtractionError
+from core.url_policy import is_http_url
 from drivers.base import BaseDriver, AssetPackage, TargetAsset
 
 class GitHubDirDriver(BaseDriver):
     """
-    Precision extractor for individual GitHub subdirectories or single files:
+    Precision extractor for individual GitHub subdirectories, single files,
+    release assets, and open-source font CDN binaries:
     - Avoids heavy `git clone` for the entire repository
-    - Direct fast raw file or REST contents tree retrieval
+    - Direct fast raw file, release binary, or REST contents tree retrieval
     - Captures author, repository metadata, commit branch, and file trees
     """
 
@@ -20,9 +24,19 @@ class GitHubDirDriver(BaseDriver):
     category = "dev"
 
     URL_REGEX = re.compile(
-        r"https?://github\.com/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)/(tree|blob)/([a-zA-Z0-9_.-]+)/(.*)",
+        r"https?://(?:(?:gh-proxy\.com|ghfast\.top)/https?://)?github\.com/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)/(tree|blob)/([a-zA-Z0-9_.-]+)/(.*)",
         re.IGNORECASE
     )
+    RELEASE_REGEX = re.compile(
+        r"https?://(?:(?:gh-proxy\.com|ghfast\.top)/https?://)?github\.com/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)/releases/download/([^/?#]+)/([^?#]+)",
+        re.IGNORECASE
+    )
+    RAW_REGEX = re.compile(
+        r"https?://(?:(?:gh-proxy\.com|ghfast\.top)/https?://)?raw\.githubusercontent\.com/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)/([^/?#]+)/([^?#]+)",
+        re.IGNORECASE
+    )
+    FONT_EXTENSIONS = (".ttf", ".otf", ".ttc", ".woff", ".woff2")
+    CDN_DOMAINS = ("cdn.jsdelivr.net", "unpkg.com", "fonts.gstatic.com", "fonts.alibabadesign.com")
 
     RAW_BASE = "https://raw.githubusercontent.com"
     API_BASE = "https://api.github.com/repos"
@@ -35,13 +49,120 @@ class GitHubDirDriver(BaseDriver):
         "Accept": "application/vnd.github.v3+json",
     }
 
+    @classmethod
+    def _is_direct_font_or_cdn_url(cls, url: str) -> bool:
+        clean = (url or "").strip()
+        if not clean.lower().startswith(("http://", "https://")):
+            return False
+        parsed = urlparse(clean)
+        path_lower = unquote(parsed.path).lower()
+        if path_lower.endswith(cls.FONT_EXTENSIONS):
+            return True
+        if is_http_url(clean, cls.CDN_DOMAINS) and path_lower.endswith((".zip", ".tar.gz", ".tgz")):
+            return True
+        return False
+
     def can_handle(self, url: str) -> bool:
-        return "github.com" in url and bool(self.URL_REGEX.search(url))
+        clean = (url or "").strip()
+        if ("github.com" in clean or "raw.githubusercontent.com" in clean) and (
+            bool(self.URL_REGEX.search(clean))
+            or bool(self.RELEASE_REGEX.search(clean))
+            or bool(self.RAW_REGEX.search(clean))
+        ):
+            return True
+        return self._is_direct_font_or_cdn_url(clean)
 
     def extract(self, url: str, **kwargs) -> AssetPackage:
-        m = self.URL_REGEX.search(url)
+        clean = url.strip()
+        proxy_prefix = ""
+        for prefix in ("https://gh-proxy.com/", "http://gh-proxy.com/", "https://ghfast.top/", "http://ghfast.top/"):
+            if clean.lower().startswith(prefix):
+                proxy_prefix = clean[:len(prefix)]
+                break
+
+        # 0A. GitHub Releases Direct Asset
+        rel_match = self.RELEASE_REGEX.search(clean)
+        if rel_match:
+            owner, repo, tag, asset_path = rel_match.groups()
+            filename = unquote(asset_path.strip("/").split("/")[-1])
+            stem = Path(filename).stem or filename
+            primary = TargetAsset(
+                url=clean,
+                filename=filename,
+                file_type="primary",
+                headers={"User-Agent": self.DEFAULT_HEADERS["User-Agent"]}
+            )
+            return AssetPackage(
+                title=f"{repo}_{stem}",
+                platform=self.name,
+                assets=[primary],
+                metadata={
+                    "original_url": clean,
+                    "repository": f"{owner}/{repo}",
+                    "tag": unquote(tag),
+                    "path": unquote(asset_path),
+                    "kind": "release"
+                },
+                raw_markdown=f"GitHub Release 发行包直下: `{owner}/{repo}` (`{unquote(tag)}` - `{filename}`)"
+            )
+
+        # 0B. GitHub Raw Single File
+        raw_match = self.RAW_REGEX.search(clean)
+        if raw_match:
+            owner, repo, branch, path = raw_match.groups()
+            path = path.strip("/")
+            filename = unquote(path.split("/")[-1])
+            primary = TargetAsset(
+                url=clean,
+                filename=filename,
+                file_type="primary",
+                headers={"User-Agent": self.DEFAULT_HEADERS["User-Agent"]}
+            )
+            return AssetPackage(
+                title=f"{repo}_{filename}",
+                platform=self.name,
+                assets=[primary],
+                metadata={
+                    "original_url": clean,
+                    "repository": f"{owner}/{repo}",
+                    "branch": unquote(branch),
+                    "path": unquote(path),
+                    "kind": "file"
+                },
+                raw_markdown=f"GitHub Raw 单文件直下: `{owner}/{repo}/{unquote(path)}` (`{unquote(branch)}`)"
+            )
+
+        # 0C. Direct Open-Source Font / CDN Binary URL
+        if not self.URL_REGEX.search(clean) and self._is_direct_font_or_cdn_url(clean):
+            parsed = urlparse(clean)
+            filename = unquote(Path(parsed.path).name) or "font.ttf"
+            headers = {"User-Agent": self.DEFAULT_HEADERS["User-Agent"]}
+            if is_http_url(clean, ("fonts.alibabadesign.com", "alibabafonts.com")):
+                headers["Referer"] = "https://www.alibabafonts.com/"
+                headers["Origin"] = "https://www.alibabafonts.com"
+            title = Path(filename).stem or filename
+            primary = TargetAsset(
+                url=clean,
+                filename=filename,
+                file_type="primary",
+                headers=headers
+            )
+            return AssetPackage(
+                title=title,
+                platform="font",
+                assets=[primary],
+                metadata={
+                    "original_url": clean,
+                    "host": parsed.netloc,
+                    "filename": filename,
+                    "kind": "font"
+                },
+                raw_markdown=f"开源字体直链提取: `{filename}`\n\n- **来源节点**：`{parsed.netloc}`\n- **原始链接**：<{clean}>"
+            )
+
+        m = self.URL_REGEX.search(clean)
         if not m:
-            raise ExtractionError(f"URL is not a GitHub directory or blob path: {url}")
+            raise ExtractionError(f"URL is not a GitHub directory, blob, or release path: {url}")
 
         owner, repo, kind, branch, path = m.groups()
         path = path.strip("/")
@@ -51,8 +172,8 @@ class GitHubDirDriver(BaseDriver):
 
         # 1. Single Blob / File
         if kind == "blob":
-            filename = path.split("/")[-1]
-            raw_url = f"{self.RAW_BASE}/{owner}/{repo}/{branch}/{path}"
+            filename = unquote(path.split("/")[-1])
+            raw_url = f"{proxy_prefix}{self.RAW_BASE}/{owner}/{repo}/{branch}/{path}"
             primary = TargetAsset(
                 url=raw_url,
                 filename=filename,

@@ -5,9 +5,9 @@
 ## 1. 视频、图文与社交平台（单入口自动识别形态）
 
 - **哔哩哔哩（B站）**
-  - **支持输入**：标准视频链接（`bilibili.com/video/BV...`）、移动端分享文本、`b23.tv` 短链
+  - **支持输入**：标准视频链接（`bilibili.com/video/BV...`，支持 `?p=N` 指定分 P 合集集数）、移动端分享文本、`b23.tv` 短链
   - **交付产物**：声画同步 `.mp4` 视频、高清封面 `cover.jpg`、`.srt` 标准时间轴字幕（自动转换 CC / AI 字幕）
-  - **附加能力**：支持 `-a` 直接提取独立 `.m4a` 纯音轨；配套元数据记录 UP 主、播放/点赞/投币/收藏等数据
+  - **附加能力**：支持 `-a` 直接提取独立 `.m4a` 纯音轨；多 P 课程合集与公开课归档规范详见 [education.md](education.md)（不支持 `bilibili.com/cheese` 付费课堂）
 - **抖音（Douyin）**
   - **支持输入**：App 整段分享口令文本（自动剥离前后乱码与数字前缀）、`v.douyin.com` 短链、`douyin.com/video/...` 或 `douyin.com/note/...` 链接
   - **交付产物（自动识别视频或图文）**：
@@ -56,9 +56,9 @@
 - **本地加密与无损音频转换**
   - **网易云 `.ncm` 本地解密**：传入本地 `.ncm` 文件路径，AES/RC4 解密还原音频流并封装为标准 `.mp3`，保留内嵌封面图与标题/歌手/专辑标签
   - **无损 `.flac` 本地转码**：传入本地 `.flac` 文件路径，转换为标准 `320kbps` `.mp3`（保留原文件）
-- **云端语音转写（`--transcribe`）**
-  - **支持输入**：任意音频任务或附加 `-a` 的视频任务（需配置 `GROQ_API_KEY`、`OPENAI_API_KEY` 或 `SILICONFLOW_KEY`）
-  - **交付产物**：自动压缩超限音频并调用 Whisper 接口，输出带分段时间戳的 `<标题>.transcript.md`
+- **可选语音转写（`--transcribe`）**
+  - **支持输入**：任意音频任务或附加 `-a` 的视频任务（仅在已接入外部转写后端且用户明确要求文字稿时按需启用；核心下载、本地字幕提取与格式转换均 100% 纯本地免配置运行）
+  - **交付产物**：自动压缩超限音频并生成带分段时间戳的 `<标题>.transcript.md`
 
 ## 3. 公众号、技术文章与知识库归档
 
@@ -71,11 +71,11 @@
 - **Obsidian 知识库同步（`--vault` / `--obsidian`）**
   - **交付产物**：将文章/媒体目录同步至指定 Obsidian Vault 的 `DownloadAnything/` 收件箱，自动在 Markdown 顶部注入标准 YAML frontmatter
 
-## 4. 学术论文与电子书
+## 4. 学术论文、公开课课件与电子书
 
-- **arXiv 论文**
-  - **支持输入**：`arxiv.org/abs/...`、`arxiv.org/pdf/...` 或纯编号（如 `2310.06825`）
-  - **交付产物**：官方全文 `.pdf`（经 `pypdf` 页数与结构校验）、`citation.bib` 标准 BibTeX 引用文件、包含摘要与作者信息的 Markdown
+- **arXiv 论文与名校公开课讲义（MIT OCW / `.edu`）**
+  - **支持输入**：`arxiv.org/abs/...`、`arxiv.org/pdf/...`、纯编号（如 `2310.06825`）、MIT OCW 资源页/讲义直链（`ocw.mit.edu/courses/...`）或高校 `.edu` 公开讲义 PDF 链接
+  - **交付产物**：官方全文 `.pdf`（经 `pypdf` 页数与结构校验）、`citation.bib` 标准 BibTeX 引用文件、包含摘要与作者信息的 Markdown（商业 MOOC 的 `not_for` 边界详见 [education.md](education.md)）
 - **DOI 开放获取论文**
   - **支持输入**：标准 DOI 标识符（如 `10.1186/...`）或 `doi.org` 链接
   - **交付产物**：通过 Crossref 与 Unpaywall 解析并下载开放获取全文 `.pdf`、自动生成官方 `citation.bib` 引用文件与论文元数据摘要
@@ -92,11 +92,11 @@
   - **支持输入**：`pan.quark.cn/s/...` 分享链接（支持多层子目录自动查找）
   - **交付产物**：读取本机登录态，自动在云端创建任务独占的 `_da_temp_<uuid>` 临时目录完成转存与高速直链下载，下载结束后自动清理云端临时目录
 
-## 6. 代码单文件与应用安装包
+## 6. 代码、开源字体与应用安装包
 
-- **GitHub 单文件**
-  - **支持输入**：`github.com/<owner>/<repo>/blob/<branch>/<path>` 单文件链接
-  - **交付产物**：免克隆整个仓库，直接按指定分支或 Commit 下载与原仓库逐字节一致的目标代码、配置或 Markdown 文件
+- **GitHub 单文件、Release 发行包与开源商用字体**
+  - **支持输入**：`github.com/<owner>/<repo>/blob/<branch>/<path>` 单文件链接、`github.com/<owner>/<repo>/releases/download/...` 发行包直链、`raw.githubusercontent.com`、jsDelivr CDN 及阿里官方字体 CDN（`fonts.alibabadesign.com`）直链
+  - **交付产物**：免克隆整个仓库直接下载目标代码或发行包；字体文件（`.ttf` / `.otf` / `.woff2`）自动执行二进制魔数校验，ZIP 字体包自动安全解压；开源商用字体实测梯队与直链速查表详见 [fonts.md](fonts.md)
 - **微软商店（Microsoft Store）**
   - **支持输入**：`apps.microsoft.com/detail/...` 链接或 12 位 Product ID（如 `9N0DX20HK701`）
   - **交付产物**：借助 `store.rg-adguard.net` 解析并从微软官方 CDN（`delivery.mp.microsoft.com`）拉取 `.msixbundle` / `.appxbundle` 离线安装包、应用图标及 PowerShell 安装说明

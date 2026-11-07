@@ -34,7 +34,8 @@ class WebArticleDriver(BaseDriver):
         "segmentfault.com",
         "oschina.net",
         "cnblogs.com",
-        "v2ex.com"
+        "v2ex.com",
+        "ocw.mit.edu",
     ]
 
     DEFAULT_HEADERS = {

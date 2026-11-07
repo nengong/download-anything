@@ -22,4 +22,18 @@ def test_arxiv_driver_can_handle():
     assert driver.can_handle("https://arxiv.org/abs/2310.06825")
     assert driver.can_handle("https://arxiv.org/pdf/2310.06825.pdf")
     assert driver.can_handle("2310.06825")
+    assert driver.can_handle("https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/resources/mit6_006s20_lec1/")
+    assert driver.can_handle("https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/477c78e0af2df61fa205bcc6cb613ceb_MIT6_006S20_lec1.pdf")
     assert not driver.can_handle("https://github.com/torvalds/linux")
+
+
+def test_ocw_direct_pdf_generates_clean_filename_and_bibtex():
+    driver = ArxivDriver()
+    pkg = driver.extract(
+        "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/477c78e0af2df61fa205bcc6cb613ceb_MIT6_006S20_lec1.pdf"
+    )
+    assert pkg.platform == "ocw"
+    assert pkg.primary_asset.filename == "MIT6_006S20_lec1.pdf"
+    assert any(a.filename == "citation.bib" for a in pkg.assets)
+    assert pkg.metadata["has_bibtex"] is True
+

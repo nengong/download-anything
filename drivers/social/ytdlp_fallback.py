@@ -85,7 +85,10 @@ class YtDlpFallbackDriver(BaseDriver):
 
         if chosen:
             stream_url = chosen["url"]
-            ext = (chosen.get("ext") or self._guess_ext(stream_url)
+            raw_ext = chosen.get("ext")
+            if raw_ext in (None, "", "unknown_video", "bin"):
+                raw_ext = None
+            ext = (raw_ext or self._guess_ext(stream_url)
                    or ("m4a" if audio_only else "mp4")).lstrip(".")
             # filesize_approx is a guess; treating it as exact makes the Fetcher
             # reject a complete download that is a few bytes off.

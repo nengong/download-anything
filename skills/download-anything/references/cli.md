@@ -13,7 +13,7 @@
 | `-a, --audio, --audio-only` | 提取纯音轨（`.m4a` / `.mp3`） |
 | `-f, --force` | 跳过本地缓存，重新解析和下载 |
 | `--vault PATH, --obsidian PATH` | 同步至指定 Obsidian Vault 目录（自动注入 YAML frontmatter） |
-| `--transcribe` | 调用云端 Whisper 接口生成带时间戳的 `.transcript.md` 文字稿（需配置 `GROQ_API_KEY`、`OPENAI_API_KEY` 或 `SILICONFLOW_KEY`） |
+| `--transcribe` | 可选扩展：调用外部语音转写服务生成带时间戳的 `.transcript.md` 文字稿（常规下载、字幕提取与本地音轨处理均纯本地免配置运行） |
 | `--unzip / --no-unzip` | 默认自动执行受限 ZIP/TAR 解压；加 `--no-unzip` 保留原压缩包 |
 | `--max-mb N` | 单文件下载大小上限（正整数，默认 500 MB） |
 | `--check` | 仅预检目标元数据与大小 |
@@ -28,10 +28,10 @@
 ### 凭据解析优先级与无头环境（Headless）支持
 
 平台凭据按如下优先级自动解析：
-1. **环境变量**：优先 `DA_<PLATFORM>_<KEY>`；Cookie 也支持 `<PLATFORM>_COOKIE`，例如 `DA_BAIDU_COOKIE` 优先于 `BAIDU_COOKIE`。Instagram 多图使用 `DA_INSTAGRAM_COOKIE_FILE` 指向授权 Cookie 文件。
+1. **环境变量**：优先 `DA_<PLATFORM>_COOKIE`；同时兼容 `<PLATFORM>_COOKIE`，例如 `DA_BAIDU_COOKIE` 优先于 `BAIDU_COOKIE`。Instagram 多图使用 `DA_INSTAGRAM_COOKIE_FILE` 指向授权 Cookie 文件。
 2. **本地配置文件**：`~/.download-anything/credentials.yaml` 及项目内 `config/credentials.yaml` 兜底；自行预置的文件应设置为 `0600`。
 3. **本机活跃浏览器 Cookie**：通过 `rookiepy` 静默提取 Chrome、Arc、Edge、Brave、Safari、Firefox 登录态（限桌面环境）。
-4. **桌面客户端本地数据库与 Keychain**：提取百度网盘/夸克网盘桌面端已登录数据库及 macOS Keychain。
+4. **桌面客户端本地数据库与系统钥匙串**：提取百度网盘/夸克网盘桌面端已登录数据库及 macOS 系统钥匙串。
 
 ### 大文件预检与 Agent 命令超时保护
 

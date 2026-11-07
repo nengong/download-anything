@@ -113,8 +113,24 @@ class BilibiliDriver(BaseDriver):
 
         bv_match = self.BV_REGEX.search(clean_url)
         if not bv_match:
+            if "/cheese/" in clean_url:
+                raise ExtractionError(
+                    f"Bilibili paid courses (bilibili.com/cheese) are paywall/DRM-protected and not supported: {clean_url}"
+                )
             raise ExtractionError(f"Could not identify valid Bilibili BV ID from: {clean_url}")
         bvid = bv_match.group(1)
+
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(clean_url).query) or parse_qs(urlparse(url).query)
+        raw_p = (qs.get("p") or [None])[0]
+        requested_page = None
+        if raw_p is not None:
+            try:
+                requested_page = int(raw_p)
+            except ValueError:
+                raise ExtractionError(f"Invalid Bilibili part number p={raw_p}")
+            if requested_page < 1:
+                raise ExtractionError(f"Invalid Bilibili part number p={raw_p}")
 
         # 2. Fetch Video Metadata via view API
         view_api = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
@@ -129,11 +145,35 @@ class BilibiliDriver(BaseDriver):
 
         data = view_data.get("data", {})
         title = data.get("title", f"bilibili_{bvid}")
-        safe_title = re.sub(r'[\\/*?:"<>|\n\r]', "_", title)[:60]
         desc = data.get("desc", "").strip()
         aid = data.get("aid")
         cid = data.get("cid")
         cover_pic = data.get("pic")
+        pages = data.get("pages") if isinstance(data.get("pages"), list) else []
+        part_title = ""
+        active_page = requested_page or 1
+
+        if requested_page is not None:
+            matched_page = next((item for item in pages if item.get("page") == requested_page), None)
+            if matched_page is None and 1 <= requested_page <= len(pages):
+                matched_page = pages[requested_page - 1]
+            if matched_page is None:
+                if requested_page > 1 or pages:
+                    raise ExtractionError(
+                        f"Requested part p={requested_page} does not exist for {bvid} (total parts: {len(pages) or 1})"
+                    )
+            else:
+                cid = matched_page.get("cid") or cid
+                part_title = str(matched_page.get("part") or "").strip()
+                if len(pages) > 1 or requested_page > 1:
+                    if part_title and part_title != title:
+                        title = f"{title}_P{requested_page}_{part_title}"
+                    else:
+                        title = f"{title}_P{requested_page}"
+        elif pages and len(pages) >= 1 and isinstance(pages[0], dict):
+            part_title = str(pages[0].get("part") or "").strip()
+
+        safe_title = re.sub(r'[\\/*?:"<>|\n\r]', "_", title)[:60]
 
         owner = data.get("owner", {})
         author_name = owner.get("name", "Bilibili Up主")
@@ -238,9 +278,16 @@ class BilibiliDriver(BaseDriver):
             platform=self.name,
             assets=assets,
             metadata={
-                "original_url": f"https://www.bilibili.com/video/{bvid}",
+                "original_url": (
+                    f"https://www.bilibili.com/video/{bvid}?p={requested_page}"
+                    if requested_page is not None and (requested_page > 1 or len(pages) > 1)
+                    else f"https://www.bilibili.com/video/{bvid}"
+                ),
                 "bvid": bvid,
                 "cid": cid,
+                "page": active_page,
+                "part": part_title,
+                "total_pages": len(pages) or 1,
                 "author": {"id": author_id, "name": author_name},
                 "author_name": author_name,
                 "description": desc,
