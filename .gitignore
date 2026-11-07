@@ -56,5 +56,6 @@ config/credentials.yaml
 /downloads/
 /output/
 /reports/
+/.agy-runs/
 *.tmp
 *.log
