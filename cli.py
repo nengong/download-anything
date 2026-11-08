@@ -27,7 +27,6 @@ from core.verifier import Verifier, detect_audio_container, detect_ebook_format
 from core.unpacker import Unpacker
 from core.index_db import AssetIndexDB
 from core.vault_sync import VaultSync
-from core.transcriber import CloudTranscriber
 from core.music_unlocker import MusicUnlocker
 from core.path_resolver import resolve_output_directory, resolve_asset_path, sanitize_filename, get_system_downloads_dir
 from core.path_resolver import create_task_directory, reserve_asset_path
@@ -76,7 +75,6 @@ def process_download(
     force: bool = False,
     vault: Optional[str] = None,
     notion: bool = False,
-    transcribe: bool = False,
     lang: Optional[str] = None
 ) -> Dict[str, Any]:
     """Core download pipeline for a single target."""
@@ -88,8 +86,7 @@ def process_download(
     cache_variant = f"{base_variant}:lang={lang.strip().lower()}" if lang and lang.strip() else base_variant
     cache_variant += f":delivery-v2:unzip={int(auto_unzip)}:sidecar={int(not no_sidecar)}"
     has_postprocessing = bool(
-        transcribe
-        or notion
+        notion
         or vault
         or output_dir
         or os.getenv("DA_OUTPUT_DIR")
@@ -410,28 +407,7 @@ def process_download(
         if companion_files:
             sidecar_dict["companion_files"] = companion_files
 
-        # 10. Cloud Speech Transcription Hook (Whisper API without local heavy models)
-        if transcribe and (audio_only or dest_file.suffix.lower() in {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"}):
-            if not agent_mode:
-                console.print("[dim cyan]🎙️ 正在调用轻量云端 Whisper 极速转写生成全文稿...[/dim cyan]")
-            try:
-                transcript_file = CloudTranscriber.transcribe(dest_file, base_dir, clean_title)
-            except Exception as exc:
-                transcript_file = None
-                operations["transcription"] = {"status": "error", "reason": str(exc)}
-            if transcript_file:
-                operations["transcription"] = {"status": "success"}
-                sidecar_dict["transcript"] = str(transcript_file.resolve())
-                if not agent_mode:
-                    console.print(f"[bold green]✔ [语音文字稿就绪][/bold green] {transcript_file.name}")
-            else:
-                operations.setdefault("transcription", {"status": "error", "reason": "Transcription produced no result"})
-                warnings.append({"stage": "transcription", "message": operations["transcription"]["reason"]})
-        elif transcribe:
-            operations["transcription"] = {"status": "skipped", "reason": "Use -a to extract an audio track before transcription"}
-            warnings.append({"stage": "transcription", "message": operations["transcription"]["reason"]})
-
-        # 11. Downstream Personal Knowledge-Base Sync (Obsidian & Notion)
+        # 10. Downstream Personal Knowledge-Base Sync (Obsidian & Notion)
         obsidian_note = None
         if vault or os.getenv("OBSIDIAN_VAULT_PATH") or os.getenv("DA_VAULT_PATH"):
             try:
@@ -544,8 +520,7 @@ def _ensure_utf8_output():
 @click.option("-a", "--audio", "--audio-only", is_flag=True, help="Extract audio-only stream (.mp3/.m4a) to save bandwidth and storage")
 @click.option("-f", "--force", is_flag=True, help="Force re-download even if already present in local asset cache")
 @click.option("--vault", "--obsidian", help="Sync downloaded notes, media, and frontmatter to Obsidian Vault path")
-@click.option("--notion", is_flag=True, help="Sync note record to Notion database (requires NOTION_API_KEY)")
-@click.option("--transcribe", is_flag=True, help="Transcribe speech/podcast audio using ultra-light cloud Whisper API")
+@click.option("--notion", is_flag=True, help="Sync note record to Notion database")
 @click.option("--unzip/--no-unzip", default=True, help="Automatically extract password-protected or standard archives upon download (default: True)")
 @click.option("--max-mb", default=500, type=click.IntRange(min=1), help="Maximum allowed file size in MB (default: 500)")
 @click.option("--check", is_flag=True, help="Dry run: inspect and extract metadata without downloading")
@@ -563,7 +538,6 @@ def main(
     force: bool,
     vault: Optional[str],
     notion: bool,
-    transcribe: bool,
     unzip: bool,
     max_mb: int,
     check: bool,
@@ -630,7 +604,7 @@ def main(
     # Output banner for Human mode
     if not agent_mode and not check:
         console.print(Panel.fit(
-            "[bold cyan]Download Anything[/bold cyan] [dim](DA v0.1.0)[/dim]\n"
+            "[bold cyan]Download Anything[/bold cyan] [dim](DA v1.0.2)[/dim]\n"
             f"[dim]Universal Micro-Asset Extraction Hub ({len(targets_list)} target{'s' if len(targets_list) > 1 else ''})[/dim]",
             border_style="cyan"
         ))
@@ -653,7 +627,6 @@ def main(
                 force=force,
                 vault=vault,
                 notion=notion,
-                transcribe=transcribe,
                 lang=lang
             )
         except Exception as e:
@@ -715,7 +688,6 @@ def main(
                 force=force,
                 vault=vault,
                 notion=notion,
-                transcribe=transcribe,
                 lang=lang
             )
             item_res["target"] = target

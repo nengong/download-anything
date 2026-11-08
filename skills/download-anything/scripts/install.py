@@ -10,7 +10,7 @@ import sys
 import sysconfig
 
 MIN_PYTHON = (3, 10)
-SKILL_VERSION = "1.0.1"
+SKILL_VERSION = "1.0.2"
 REPOSITORY = "https://github.com/nengong/download-anything"
 MANAGED_PYTHON = "3.12"
 # Official PyPI first, then the mirrors most likely to work from mainland China.

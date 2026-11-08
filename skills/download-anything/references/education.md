@@ -21,7 +21,7 @@ B 站（`bilibili.com/video/BV...`）是中文体系化技术课与大学公开�
 # 下载公开课指定第 2 讲视频（含封面与可用 .srt 字幕）
 da "https://www.bilibili.com/video/BV11s41167h6?p=2" --json
 
-# 仅提取公开课第 2 讲纯音轨（.m4a，极速落盘供听课或转写总结）
+# 仅提取公开课第 2 讲纯音轨（.m4a，极速落盘供离线听课）
 da "https://www.bilibili.com/video/BV11s41167h6?p=2" -a --json
 
 # 批量下载多讲：将 ?p=1, ?p=2, ?p=3 逐行写入 courses.txt 后串行归档

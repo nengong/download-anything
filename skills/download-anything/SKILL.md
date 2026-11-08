@@ -1,16 +1,16 @@
 ---
 name: download-anything
-description: 面向个人与 AI Agent 的全能下载与结构化归档工具。当用户要求下载、提取、转换或归档社交视频与图文（B站及分P合集、抖音、小红书、YouTube、X、微博、Instagram、TikTok、m3u8）、播客与音频（小宇宙、Apple Podcasts、网易云音乐、Spotify、Apple Music、本地 NCM 解密与 FLAC 转 MP3）、文章与知识库（微信公众号、知乎/掘金/CSDN/Medium 等技术社区、Obsidian 同步）、学术论文与公开课课件（arXiv、DOI 论文、MIT OCW 开放讲义 PDF、ISBN/MD5 电子书）、开源商用字体（霞鹜文楷、思源黑体/宋体、阿里普惠体、JetBrains Mono、Inter 等）、百度/夸克网盘分享、GitHub 单文件与发行包或微软商店/安卓 APK 安装包时触发；也可在用户要求总结视频、公开课、播客或文章链接时调用，以提取本地字幕（.srt）、转写稿、Shownotes 或 Markdown 正文供 Agent 分析。
+description: 面向个人与 AI Agent 的全能下载与结构化归档工具。当用户要求下载、提取、转换或归档社交视频与图文（B站及分P合集、抖音、小红书、YouTube、X、微博、Instagram、TikTok、m3u8）、播客与音频（小宇宙、Apple Podcasts、网易云音乐、Spotify、Apple Music、本地 NCM 解密与 FLAC 转 MP3）、文章与知识库（微信公众号、知乎/掘金/CSDN/Medium 等技术社区、Obsidian 同步）、学术论文与公开课课件（arXiv、DOI 论文、MIT OCW 开放讲义 PDF、ISBN/MD5 电子书）、开源商用字体（霞鹜文楷、思源黑体/宋体、阿里普惠体、JetBrains Mono、Inter 等）、百度/夸克网盘分享、GitHub 单文件与发行包或微软商店/安卓 APK 安装包时触发；也可在用户要求总结视频、公开课、播客或文章链接时调用，以提取本地字幕（.srt）、Shownotes 或 Markdown 正文供 Agent 分析。
 ---
 
 # Download Anything (DA)
 
-调用 `da`（或 `dl`）将分享口令文本、链接、DOI、ISBN、MD5、包名或本地音频文件下载并结构化归档到本地。全量核心下载、解密、格式转换与完整性校验均 **100% 纯本地开箱即用、免配置离线运行**。各平台详细输入输出规范见 [references/platforms.md](references/platforms.md)，开源字体实测梯队与直链见 [references/fonts.md](references/fonts.md)，公开课归档与 `not_for` 边界见 [references/education.md](references/education.md)，完整 CLI 参数与 JSON 字段定义见 [references/cli.md](references/cli.md)。
+调用 `da`（或 `dl`）将分享口令文本、链接、DOI、ISBN、MD5、包名或本地音频文件下载并结构化归档到本地。全量核心下载、解密、格式转换与完整性校验均 **开箱即用、免配置本地运行**。各平台详细输入输出规范见 [references/platforms.md](references/platforms.md)，开源字体实测梯队与直链见 [references/fonts.md](references/fonts.md)，公开课归档与 `not_for` 边界见 [references/education.md](references/education.md)，完整 CLI 参数与 JSON 字段定义见 [references/cli.md](references/cli.md)。
 
 ## 1. 支持的能力与产物速查（按平台合并，单入口自动识别）
 
 - **视频、图文与社交**（B站 / 抖音 / 小红书 / YouTube / X / 微博 / Instagram / TikTok / `.m3u8`）：自动识别视频（输出 `.mp4`，抖音支持免水印最高 4K；加 `-a` 提取纯音轨 `.m4a`/`.mp3`）或多图（`image_01.jpg` + `companion_files`）；自动生成 `cover.jpg` 原画封面、`content.md`、`content.info.json`；**B站支持 `?p=N` 分 P 精准选集与 `.srt` 字幕提取**，**抖音提取 `audio.mp3` 原声**，**小红书实况图提取配套 `.mov`**。
-- **播客、音乐与音频**（小宇宙 / Apple Podcasts / 网易云音乐 / Spotify / Apple Music / 本地 `.ncm` 与 `.flac`）：输出 `.m4a` 或 `.mp3`（本地转换统一输出 `320kbps .mp3`）；配套生成播客 `content.md`（完整 Shownotes 与时间轴）、音乐 `.lrc` 歌词、高清专辑封面；加 `--transcribe` 生成 `.transcript.md`。
+- **播客、音乐与音频**（小宇宙 / Apple Podcasts / 网易云音乐 / Spotify / Apple Music / 本地 `.ncm` 与 `.flac`）：输出 `.m4a` 或 `.mp3`（本地转换统一输出 `320kbps .mp3`）；配套生成播客 `content.md`（完整 Shownotes 与时间轴）、音乐 `.lrc` 歌词、高清专辑封面。
 - **文章与知识库**（微信公众号 / 知乎 / 掘金 / CSDN / 博客园 / Medium / Substack / 少数派 / 简书 / SegmentFault / 开源中国 / V2EX）：输出干净 Markdown `article.md`，防盗链配图全部本地化（`img_01.png`...）并重写相对路径；加 `--vault` 自动注入 YAML frontmatter 同步至 Obsidian。
 - **学术论文、公开课课件与电子书**（arXiv 链接或编号 / DOI / MIT OCW `ocw.mit.edu` 课程讲义与 `.edu` 开放课件 PDF / 10或13位 ISBN / 32位 MD5）：输出经 `pypdf` 页数校验的论文/讲义 `.pdf` 或电子书 `.epub` / `.pdf`；论文与公开课讲义自动生成标准 `citation.bib` 引用文件与包含作者/摘要的 `content.md`（商业付费/DRM 网课边界见 [references/education.md](references/education.md)）。
 - **网盘分享**（百度网盘 / 夸克网盘）：自动识别内嵌提取码，支持子目录递归查找与云端临时目录自动清理；ZIP/TAR 默认安全解压并记录于 `extracted_files`。
@@ -59,9 +59,8 @@ description: 面向个人与 AI Agent 的全能下载与结构化归档工具。
 # 通用下载（直接传入分享口令、URL、DOI、ISBN、MD5、包名/Product ID 或本地音频路径）
 da "<目标输入>" --json
 
-# 仅提取纯音轨（纯本地免密运行；若需额外生成语音转写稿，仅在用户明确要求转写且已就绪外部转写服务时附加 --transcribe）
+# 仅提取纯音轨（.m4a / .mp3）
 da "<视频或播客链接>" -a --json
-da "<视频或播客链接>" -a --transcribe --json
 
 # 归档至本地 Obsidian 知识库
 da "<公众号或文章链接>" --vault "/path/to/vault" --json
@@ -77,7 +76,7 @@ da login <平台名称> --json
 
 ### 第五步：消费结构化归档产物（赋能下游分析）
 下载完成后，**不要直接读取 `.mp4` / `.m4a` 等二进制媒体文件**，应直接利用 JSON 返回的结构化文本文件完成用户的总结、提炼或问答需求：
-- **总结视频 / 播客**：直接读取 JSON 中 `sidecars.subtitle`（`.srt` 字幕）、`sidecars.transcript`（`.transcript.md` 转写稿）或 `sidecars.markdown`（节目 Shownotes、视频简介、时间戳与互动数据）。
+- **总结视频 / 播客**：直接读取 JSON 中 `sidecars.subtitle`（`.srt` 字幕）或 `sidecars.markdown`（节目 Shownotes、视频简介、时间戳与互动数据）。
 - **精读公众号 / 技术文章**：直接读取 `primary_asset`（`article.md`），正文内插图已转为同目录下的本地图片文件。
 - **整理学术文献**：读取 `primary_asset`（`.pdf`）的同时，可直接读取 `companion_files` 中的 `citation.bib` 获取标准 BibTeX 引用，以及 `sidecars.markdown` 获取摘要与作者元数据。
 
@@ -87,7 +86,7 @@ da login <平台名称> --json
 
 - **`status: "success"`（退出码 `0`）**：主文件已通过格式/媒体结构校验（见 `verification.details.level`），所有配套文件与同步步骤均已完成。
 - **`status: "cached"`（退出码 `0`）**：命中本地 SQLite 缓存（`~/.download-anything/index.db`）且本地文件完整，直接使用返回的 `primary_asset` 与 `sidecars` 路径，无需重复下载（除非用户要求强制刷新才加 `-f`）。
-- **`status: "partial"`（退出码 `2`）**：**主文件已成功下载并通过校验**，仅部分附属文件（如某张配图、字幕 429）或后处理步骤（转写、清理）未完成。
+- **`status: "partial"`（退出码 `2`）**：**主文件已成功下载并通过校验**，仅部分附属文件（如某张配图、字幕 429）或后处理步骤（如 Obsidian 同步、临时目录清理）未完成。
   - **处理准则**：**切勿将 `partial` 当作失败去盲目重下主文件！** 直接使用已落盘的 `primary_asset`，并读取 `warnings` 与 `operations` 字段向用户说明哪项附属步骤未完成及其原因。
 - **`status: "dry_run"`（退出码 `0`）**：仅完成 `--check` 预检，未实际落盘文件。
 - **`status: "error"`（退出码 `1`）**：根据 `error_type` 执行有限自愈，严禁把失败或预检汇报为下载成功：

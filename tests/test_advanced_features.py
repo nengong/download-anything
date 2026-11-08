@@ -2,7 +2,6 @@
 Unit Tests for Advanced Capabilities:
 - Local Deduplication (AssetIndexDB & dirty share text cache hit)
 - Knowledge-Base Sync (VaultSync for Obsidian & Notion with duplicate filtering)
-- Cloud Speech-to-Text Transcription Hook (CloudTranscriber)
 - Feishu & Notion Public Document Drivers
 - Sidecar .lrc lyrics generation, Bilibili .srt subtitle conversion, and Audio stream container verification
 """
@@ -17,7 +16,6 @@ import yaml
 from core.index_db import AssetIndexDB
 from core.exceptions import DAError
 from core.vault_sync import VaultSync
-from core.transcriber import CloudTranscriber
 from core.sidecar import SidecarWriter
 from core.verifier import Verifier
 from drivers.base import AssetPackage, TargetAsset
@@ -280,7 +278,6 @@ def test_audio_only_cache_variant_is_independent(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "options",
     [
-        {"transcribe": True},
         {"vault": "/tmp/vault"},
         {"notion": True},
         {"output_dir": "/tmp/new-output"},
@@ -358,33 +355,6 @@ def test_bilibili_subtitle_srt_conversion(monkeypatch):
     decoded = base64.b64decode(sub_asset.url.split(",", 1)[1]).decode("utf-8")
     assert "00:00:00,500 --> 00:00:02,800" in decoded
     assert "第一句字幕" in decoded
-
-def test_cloud_transcriber_groq_mock(monkeypatch):
-    with tempfile.TemporaryDirectory() as td:
-        tpath = Path(td)
-        audio = tpath / "speech.mp3"
-        audio.write_bytes(b"\x00" * 5000)
-
-        monkeypatch.setenv("GROQ_API_KEY", "gsk_test123456789")
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "text": "Hello world this is an AI podcast",
-            "segments": [
-                {"start": 0.0, "end": 2.5, "text": "Hello world"},
-                {"start": 2.5, "end": 5.0, "text": "this is an AI podcast"}
-            ]
-        }
-        monkeypatch.setattr("requests.post", lambda *args, **kwargs: mock_resp)
-
-        transcript_file = CloudTranscriber.transcribe(audio, tpath, "Test_Speech")
-        assert transcript_file is not None
-        assert transcript_file.exists()
-        content = transcript_file.read_text(encoding="utf-8")
-        assert "语音文字稿" in content
-        assert "[00:00]" in content
-        assert "Hello world" in content
 
 def test_feishu_driver_can_handle():
     driver = FeishuDocDriver()

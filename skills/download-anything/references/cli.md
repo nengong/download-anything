@@ -13,7 +13,6 @@
 | `-a, --audio, --audio-only` | 提取纯音轨（`.m4a` / `.mp3`） |
 | `-f, --force` | 跳过本地缓存，重新解析和下载 |
 | `--vault PATH, --obsidian PATH` | 同步至指定 Obsidian Vault 目录（自动注入 YAML frontmatter） |
-| `--transcribe` | 可选扩展：调用外部语音转写服务生成带时间戳的 `.transcript.md` 文字稿（常规下载、字幕提取与本地音轨处理均纯本地免配置运行） |
 | `--unzip / --no-unzip` | 默认自动执行受限 ZIP/TAR 解压；加 `--no-unzip` 保留原压缩包 |
 | `--max-mb N` | 单文件下载大小上限（正整数，默认 500 MB） |
 | `--check` | 仅预检目标元数据与大小 |
@@ -73,8 +72,8 @@ da "/path/to/audio.flac" --json
 }
 ```
 
-- **配套元数据与附属文件**：`sidecars` 按实际生成情况包含 `info_json`、`markdown`、`named_info_json`、`named_markdown`、`cover`、`subtitle`、`lyrics`（`.lrc` 歌词）、`transcript`（语音转写稿）、`obsidian_vault_note`；多图、文章插图或 `citation.bib` 等附属文件路径记录在 `companion_files` 列表中。
-- **后续操作状态**：`operations` 按需记录 `transcription`、`obsidian` 与 `cleanup` 的执行状态（`status` 及原因 `reason`）。
+- **配套元数据与附属文件**：`sidecars` 按实际生成情况包含 `info_json`、`markdown`、`named_info_json`、`named_markdown`、`cover`、`subtitle`、`lyrics`（`.lrc` 歌词）、`obsidian_vault_note`；多图、文章插图或 `citation.bib` 等附属文件路径记录在 `companion_files` 列表中。
+- **后续操作状态**：`operations` 按需记录 `obsidian` 与 `cleanup` 的执行状态（`status` 及原因 `reason`）。
 - **校验级别（`verification.details.level`）**：音视频结构扫描为 `media-structure`，常规格式为 `basic`，加密 ZIP 容器识别为 `encrypted-container`，本地缓存复用为 `cached-existence`。
 - **缓存命中（`status: cached`）**：当 URL 与下载参数（音频、解压、伴生文件等）一致且本地交付文件完整时，返回 `cached: true`、`primary_asset`、`output_dir`、`size_bytes`、`sha256`、`sidecars` 与 `created_at`。
 - **元数据预检（`status: dry_run`）**：`primary_asset` 为包含 `filename`、`url`、`expected_size`、`file_type` 的描述对象，并附带 `metadata` 与 `total_assets`。

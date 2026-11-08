@@ -7,7 +7,7 @@ testpaths = ["tests"]
 
 [project]
 name = "download-anything"
-version = "1.0.1"
+version = "1.0.2"
 description = "High-density micro-asset (<500MB) extraction and offline archiving hub"
 readme = "README.md"
 requires-python = ">=3.10"

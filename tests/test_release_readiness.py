@@ -320,15 +320,6 @@ def test_notion_failure_preserves_primary_and_reports_reason(tmp_path):
     assert "not configured" in result["operations"]["notion"]["reason"]
 
 
-def test_transcription_failure_is_partial_with_actual_reason(tmp_path, media_samples):
-    driver = StubDriver([asset("audio.mp3", media_samples[".mp3"])])
-    with patch("cli.CloudTranscriber.transcribe", side_effect=DAError("Transcription API returned HTTP 429")):
-        result = run(driver, tmp_path, transcribe=True)
-    assert result["status"] == "partial"
-    assert "429" in result["operations"]["transcription"]["reason"]
-    assert Path(result["primary_asset"]).exists()
-
-
 def test_local_audio_preflight_does_not_transcode_or_create_outputs(tmp_path):
     from drivers.audio.local_audio import LocalAudioDriver
     source = tmp_path / "speech.wav"

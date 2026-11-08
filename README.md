@@ -124,7 +124,7 @@ DA 将一次提取任务拆解为四个可验证阶段：
    - 默认单文件下载上限 `500 MB`（可通过 `--max-mb N` 调整）。
    - 针对 PDF（`pypdf`）、EPUB、图片（`Pillow`）、压缩包（`zipfile`）执行格式检查；借助 `ffprobe` 扫描音视频轨道与可读数据包（`media-structure` 级别，统计有效音视频流数量与 `has_audio` 状态）。
    - 支持 `ZIP` / `TAR` 归档自动解压与路径边界检查（总量上限 `500 MB` / `10,000` 个成员），可通过 `--no-unzip` 保留原压缩包。
-4. **结构化归档与知识库同步（`core/sidecar.py` & `core/vault_sync.py`）**：主文件落盘后按需生成 `.info.json`、Markdown 正文、`.srt` 字幕、`.lrc` 歌词或 `citation.bib`，支持同步至本地 Obsidian 知识库及可选语音转写（`--transcribe`），并通过 SQLite 本地索引（`~/.download-anything/index.db`）实现缓存复用。
+4. **结构化归档与知识库同步（`core/sidecar.py` & `core/vault_sync.py`）**：主文件落盘后按需生成 `.info.json`、Markdown 正文、`.srt` 字幕、`.lrc` 歌词或 `citation.bib`，支持同步至本地 Obsidian 知识库，并通过 SQLite 本地索引（`~/.download-anything/index.db`）实现缓存复用。
 
 ## 支持的能力全景
 
@@ -143,7 +143,6 @@ DA 将一次提取任务拆解为四个可验证阶段：
 - **小宇宙 & Apple Podcasts**：下载单集原档音频（`.m4a` / `.mp3`）与高清封面，完整提取节目 Shownotes、简介与时间轴笔记。
 - **网易云音乐 / Spotify / Apple Music**：公开曲目直接下载 `.mp3`、超清专辑封面（Apple Music 支持 `3000×3000`）与同步滚动歌词（`.lrc`）；受限曲目自动提取官方封面、歌词与元数据并通过公开音源匹配下载完整 `.mp3`。
 - **本地加密与无损音频转换**：网易云 `.ncm` 本地解密还原为标准 `.mp3`（保留内嵌专辑封面与 ID3 标签）；无损 `.flac` 转换为标准 `320kbps` `.mp3`（保留原文件）。
-- **可选语音转写（`--transcribe`）**：支持在已接入外部语音转写服务时，将播客或视频音轨（`-a --transcribe`）生成带分段时间戳的 `.transcript.md` 文字稿；全量核心下载、字幕提取与本地转换均纯本地免配置运行。
 
 ### 3. 公众号、技术文章与知识库归档
 
