@@ -397,7 +397,8 @@ class Verifier:
             result = subprocess.run(
                 [probe, "-v", "error", "-count_packets", "-show_streams", "-show_format",
                  "-of", "json", str(path)],
-                capture_output=True, text=True, timeout=60,
+                # Keep ffprobe JSON as bytes so the locale cannot affect decoding.
+                capture_output=True, timeout=60,
             )
             if result.returncode or result.stderr.strip():
                 raise ValueError("ffprobe reported invalid or truncated media")

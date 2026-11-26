@@ -91,6 +91,7 @@ def media_samples(tmp_path_factory):
         samples["." + ext] = path.read_bytes()
     video = root / "sample.mp4"
     subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i",
-                    "color=black:size=32x32:duration=0.3", "-c:v", "mpeg4", str(video)], check=True)
+                    "color=black:size=32x32:duration=0.3", "-c:v", "mpeg4",
+                    "-metadata", "title=\u4e2d\u6587\u6807\u9898", str(video)], check=True)
     samples[".mp4"] = video.read_bytes()
     return samples
